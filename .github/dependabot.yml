@@ -1,0 +1,31 @@
+version: 2
+# Actions are pinned to commit SHAs so a retagged or compromised tag cannot
+# inject code into the build. Dependabot is the mechanism that keeps those pins
+# current: it opens a PR with the new SHA and the version comment updated.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - github-actions
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+    # Grouped so routine patch churn arrives as one reviewable PR instead of a
+    # dozen. Security advisories still open their own.
+    groups:
+      dev-minor-patch:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch

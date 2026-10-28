@@ -28,13 +28,15 @@
     "test:integration": "vitest run --project integration",
     "test:all": "vitest run",
     "check": "npm run typecheck && npm run test:all",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
+    "@vitest/coverage-v8": "^5.0.5",
     "rea-agents": "6.8.0",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
