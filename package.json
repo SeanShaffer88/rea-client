@@ -34,7 +34,7 @@
     "advisories:refresh": "curl -fsS -H 'accept: application/vnd.github+json' 'https://api.github.com/advisories?ecosystem=npm&affects=zod&per_page=100' -o vendor/advisories/zod.ghsa.json"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.3.1"
+    "@modelcontextprotocol/client": "2.4.0"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
