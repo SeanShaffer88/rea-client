@@ -1,0 +1,12 @@
+{
+  "accepted": [
+    {
+      "id": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "rationale": "rea-agents@6.8.0 pins zod 4.4.3 exactly, and that nested copy is the one it validates MCP tool arguments with. The hoisted 4.6.7 used by the MCP SDK is already patched, so upgrading rea-agents' own pin is an upstream change we cannot make from here.",
+      "mitigation": "AgentSession.checkToolArguments bounds every outbound array argument (default 256 items) and total payload size (64 KiB) before dispatch, so an oversized array never reaches REA's validator. Unit- and integration-tested, including that the tool is not called at all. Re-evaluate if a caller bypasses the engine and talks to rea-agents directly.",
+      "reviewedAt": "2026-10-27",
+      "reviewBy": "2027-01-31"
+    }
+  ]
+}

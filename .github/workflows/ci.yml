@@ -61,6 +61,17 @@ jobs:
       - name: Verify vendored dependency
         run: node dist/cli.js vendor verify node_modules/rea-agents --manifest vendor/rea-agents.manifest.json
 
+      # Assesses the copies of a dependency that actually ship. Deliberately
+      # uses recorded advisory data (vendor/advisories/) rather than the live
+      # API: a security gate that depends on a network call is a gate that goes
+      # green when the network does. `npm run advisories:refresh` updates the
+      # recording; see docs/supply-chain.md for why this exists at all.
+      - name: Assess dependency advisories
+        run: |
+          node dist/cli.js vendor advisories zod \
+            --advisories vendor/advisories/zod.ghsa.json \
+            --accept vendor/advisories/accepted.json
+
       # Both vitest projects: unit, plus integration against a real rea-agents
       # MCP server over stdio and a real HTTP model server.
       - name: Test

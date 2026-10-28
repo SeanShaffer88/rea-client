@@ -109,6 +109,7 @@ server:
 | `doctor` | Node version, air-gap policy, workspace, MCP connect + inventory, provider availability, model endpoint |
 | `vendor manifest` | Record a hash manifest for a vendored dependency, anchored to the published tarball |
 | `vendor verify` | Check a vendored tree against its manifest, offline |
+| `vendor advisories` | Resolve advisories against every installed copy of a dependency and judge reachability |
 | `tools` | Catalog grouped by family, plus the advertised scope and anything missing |
 | `probe <binary>` | `open_binary` + `binary_overview`, no model needed |
 | `ask "<question>"` | Full agent loop with streamed output |
@@ -173,6 +174,20 @@ instruction-like strings inside a hostile binary read as data, not as orders.
 
 **Only loopback endpoints are allowed by default.** The air-gap claim is
 enforced at config load, not just documented.
+
+**Advisories are judged on reachability, not version ranges.** `npm audit`
+reports zero production vulnerabilities for this project. It is right about the
+hoisted `zod@4.6.7` and wrong about what matters: `rea-agents` pins its own
+`zod@4.4.3`, nested and inside the vulnerable range, and that is the copy
+validating tool arguments. `vendor advisories` resolves the advisory against
+every installed copy, then checks the precondition against the live tool
+surface — 69 of 74 array parameters have no length limit. The verdict is
+`reachable`, not a footnote. Because that nested pin cannot be upgraded from
+here, `AgentSession` bounds every outbound tool call (256 array items, 64 KiB)
+before dispatch, so the oversized payload never reaches the vulnerable validator
+at all. The finding is accepted in `vendor/advisories/accepted.json` with that
+mitigation and a review date; remove the guard and the acceptance is void.
+See [docs/supply-chain.md](docs/supply-chain.md).
 
 **CI actions are pinned to commit SHAs**, with Dependabot keeping the pins
 current — a retagged or compromised action tag cannot inject code into the
