@@ -138,4 +138,41 @@ export {
   type TarballData,
 } from "./packaging/registry.js";
 export { TarError, normalizeEntryPath, readTarball, type TarEntry } from "./packaging/tar.js";
+export {
+  AdvisoryError,
+  SEVERITY_ORDER,
+  analyzeArraySurface,
+  assessAdvisories,
+  assessDependency,
+  fetchAdvisories,
+  installedCopies,
+  loadAdvisoriesFromFile,
+  loadKnownFindings,
+  normalizeAdvisoryPayload,
+  severityAtLeast,
+  type Advisory,
+  type AdvisoryAssessment,
+  type AdvisoryReport,
+  type AdvisorySourceOptions,
+  type ArraySurface,
+  type ArraySurfaceHit,
+  type AssessOptions,
+  type InstalledCopy,
+  type KnownFinding,
+  type ReachabilityVerdict,
+} from "./packaging/advisories.js";
+export {
+  SemverError,
+  compareSemver,
+  isValidSemver,
+  parseSemver,
+  satisfiesRange,
+  type Semver,
+} from "./packaging/semver.js";
+export {
+  DEFAULT_GUARD_LIMITS,
+  checkToolArguments,
+  type ArgumentGuardLimits,
+  type ArgumentGuardResult,
+} from "./agent/argumentGuard.js";
 export { Emitter } from "./util/emitter.js";

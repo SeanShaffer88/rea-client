@@ -29,7 +29,9 @@
     "test:all": "vitest run",
     "check": "npm run typecheck && npm run test:all",
     "dev": "tsx src/cli.ts",
-    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8"
+    "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8",
+    "advisories": "node dist/cli.js vendor advisories zod --advisories vendor/advisories/zod.ghsa.json --accept vendor/advisories/accepted.json",
+    "advisories:refresh": "curl -fsS -H 'accept: application/vnd.github+json' 'https://api.github.com/advisories?ecosystem=npm&affects=zod&per_page=100' -o vendor/advisories/zod.ghsa.json"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1"

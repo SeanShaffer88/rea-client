@@ -28,6 +28,12 @@ import { readBinarySession } from "./mcp/session.js";
 import { canonicalizeTargetPath, TargetPathError } from "./platform/paths.js";
 import { ManifestError, parseManifest, serializeManifest, verifyManifest } from "./packaging/manifest.js";
 import {
+  AdvisoryError,
+  assessDependency,
+  loadKnownFindings,
+} from "./packaging/advisories.js";
+import type { McpToolDefinition } from "./mcp/types.js";
+import {
   RegistryError,
   buildAnchoredManifest,
   fetchPackument,
@@ -46,6 +52,7 @@ Usage:
   rea-client ask "<question>" [--open <binary>] [--config <path>] [--json]
   rea-client vendor manifest <dir> --out <file> [--registry <url>] [--json]
   rea-client vendor verify <dir> --manifest <file> [--json]
+  rea-client vendor advisories [<package>] [--deny <severity>] [--advisories <file>] [--json]
 
 Options:
   --config <path>   config.json to load (default: ./config.json)
@@ -56,6 +63,11 @@ Options:
   --out <path>      vendor manifest: where to write the manifest
   --manifest <path> vendor verify: manifest to verify against
   --registry <url>  vendor manifest: npm registry (default registry.npmjs.org)
+  --deny <sev>       vendor advisories: fail on reachable low|medium|high|critical (default high)
+  --allow-undetermined  vendor advisories: let "could not check" pass (not recommended)
+  --accept <file>    vendor advisories: findings already reviewed and accepted
+  --advisories <f>   vendor advisories: read advisory JSON offline instead of querying
+                     (REA_ADVISORY_API overrides the advisory service URL)
   --help, -h        show this help
 
 Exit codes:
@@ -76,6 +88,10 @@ async function main(argv: readonly string[]): Promise<number> {
       out: { type: "string" },
       manifest: { type: "string" },
       registry: { type: "string" },
+      deny: { type: "string" },
+      advisories: { type: "string" },
+      "allow-undetermined": { type: "boolean", default: false },
+      accept: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -99,11 +115,15 @@ async function main(argv: readonly string[]): Promise<number> {
     case "ask":
       return commandAsk(config, positionals.slice(1), values.json === true, values.open, values.scope);
     case "vendor":
-      return commandVendor(positionals.slice(1), {
+      return commandVendor(positionals.slice(1), config, {
         json: values.json === true,
         out: values.out,
         manifest: values.manifest,
         registry: values.registry,
+        deny: values.deny,
+        advisories: values.advisories,
+        allowUndetermined: values["allow-undetermined"] === true,
+        accept: values.accept,
       });
     default:
       process.stderr.write(`Unknown command: ${command}\n\n${USAGE}`);
@@ -367,25 +387,203 @@ interface VendorOptions {
   readonly out: string | undefined;
   readonly manifest: string | undefined;
   readonly registry: string | undefined;
+  readonly deny: string | undefined;
+  readonly advisories: string | undefined;
+  readonly allowUndetermined?: boolean;
+  readonly accept: string | undefined;
 }
 
-async function commandVendor(args: readonly string[], options: VendorOptions): Promise<number> {
-  const [subcommand, directory] = args;
+async function commandVendor(
+  args: readonly string[],
+  config: ReaClientConfig,
+  options: VendorOptions,
+): Promise<number> {
+  const [subcommand, argument] = args;
 
-  if (subcommand === undefined || directory === undefined) {
-    process.stderr.write("usage: rea-client vendor <manifest|verify> <dir> [--out|--manifest <file>]\n");
+  if (subcommand === undefined) {
+    process.stderr.write(
+      "usage: rea-client vendor <manifest|verify|advisories> ...\n",
+    );
     return 2;
   }
 
   switch (subcommand) {
     case "manifest":
-      return vendorManifest(directory, options);
+      if (argument === undefined) {
+        process.stderr.write("usage: rea-client vendor manifest <dir> --out <file>\n");
+        return 2;
+      }
+      return vendorManifest(argument, options);
     case "verify":
-      return vendorVerify(directory, options);
+      if (argument === undefined) {
+        process.stderr.write("usage: rea-client vendor verify <dir> --manifest <file>\n");
+        return 2;
+      }
+      return vendorVerify(argument, options);
+    case "advisories":
+      // The package is optional here: it defaults to the vendored REA server.
+      return vendorAdvisories(argument ?? "zod", config, options);
     default:
       process.stderr.write(`Unknown vendor subcommand: ${subcommand}\n`);
       return 2;
   }
+}
+
+const SEVERITIES = ["low", "medium", "high", "critical"] as const;
+
+/**
+ * Assesses advisories for a dependency of the shipped bundle.
+ *
+ * Loads the live tool surface so reachability can be judged against the schemas
+ * that actually accept input, rather than against the package name alone.
+ */
+async function vendorAdvisories(
+  packageName: string,
+  config: ReaClientConfig,
+  options: VendorOptions,
+): Promise<number> {
+  const denyRaw = (options.deny ?? "high").toLowerCase();
+  const deny = SEVERITIES.find((severity) => severity === denyRaw);
+  if (deny === undefined) {
+    process.stderr.write(`--deny must be one of: ${SEVERITIES.join(", ")}\n`);
+    return 2;
+  }
+
+  // The tool surface is optional evidence: without a reachable REA server the
+  // verdict falls back to "undetermined" rather than assuming safety, and the
+  // reason is carried into the report so the verdict can explain itself.
+  let tools: readonly McpToolDefinition[] | undefined;
+  let surfaceUnavailableReason: string | undefined;
+  const client = new ReaClient(config.rea);
+  try {
+    await client.connect();
+    tools = await client.listTools();
+  } catch (error) {
+    surfaceUnavailableReason =
+      `could not enumerate the REA tool surface (${(error as Error).message}); ` +
+      `run \`rea-client doctor\` to diagnose`;
+    tools = undefined;
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+
+  let knownFindings;
+  if (options.accept !== undefined) {
+    try {
+      knownFindings = await loadKnownFindings(options.accept);
+    } catch (error) {
+      if (error instanceof AdvisoryError) {
+        process.stderr.write(`${error.message}\n`);
+        return 2;
+      }
+      throw error;
+    }
+  }
+
+  let report;
+  try {
+    report = await assessDependency({
+      projectRoot: process.cwd(),
+      packageName,
+      denySeverity: deny,
+      ...(tools === undefined ? {} : { tools }),
+      ...(options.advisories === undefined ? {} : { advisoriesFile: options.advisories }),
+      // An air-gapped site can point this at an internal advisory mirror.
+      ...(process.env["REA_ADVISORY_API"] === undefined
+        ? {}
+        : { advisoryBaseUrl: process.env["REA_ADVISORY_API"] }),
+      ...(surfaceUnavailableReason === undefined ? {} : { surfaceUnavailableReason }),
+      ...(options.allowUndetermined === true ? { allowUndetermined: true } : {}),
+      ...(knownFindings === undefined ? {} : { knownFindings }),
+    });
+  } catch (error) {
+    if (error instanceof AdvisoryError) {
+      process.stderr.write(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
+
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report.ok ? 0 : 1;
+  }
+
+  if (report.lookupError !== undefined) {
+    process.stderr.write(`Could not assess advisories: ${report.lookupError}\n`);
+    process.stderr.write(
+      "Pass --advisories <file> to assess against recorded advisory data offline.\n",
+    );
+    return 1;
+  }
+
+  process.stdout.write(`${packageName}: ${String(report.copies.length)} installed copies\n`);
+  for (const copy of report.copies) {
+    const origin = copy.requiredBy.length > 0 ? copy.requiredBy.join(", ") : "transitive";
+    process.stdout.write(`  ${copy.version}  ${copy.path}  (from ${origin})\n`);
+  }
+
+  if (report.assessments.length === 0) {
+    process.stdout.write("No advisories affect this package.\n");
+    return 0;
+  }
+
+  process.stdout.write("\n");
+  for (const assessment of report.assessments) {
+    const { advisory } = assessment;
+    const affected =
+      assessment.affectedCopies.length === 0
+        ? "no installed copy"
+        : assessment.affectedCopies.map((copy) => `${copy.path}@${copy.version}`).join(", ");
+    process.stdout.write(
+      `${assessment.verdict.toUpperCase()}  ${advisory.id} [${advisory.severity}]  ${advisory.summary}\n`,
+    );
+    process.stdout.write(`         range ${advisory.vulnerableRange}  affected: ${affected}\n`);
+    if (advisory.patchedVersion !== undefined) {
+      process.stdout.write(`         fix: upgrade to ${advisory.patchedVersion}\n`);
+    }
+    process.stdout.write(`         ${assessment.rationale}\n\n`);
+  }
+
+  if (report.surfaceUnavailableReason !== undefined) {
+    process.stdout.write(`note: ${report.surfaceUnavailableReason}\n\n`);
+  }
+
+  const acceptedIds = new Set((report.accepted ?? []).map((entry) => entry.assessment.advisory.id));
+  for (const entry of report.accepted ?? []) {
+    process.stdout.write(
+      `ACCEPTED  ${entry.finding.id}  ${entry.finding.rationale}\n` +
+        `          mitigation: ${entry.finding.mitigation}\n` +
+        `          reviewed ${entry.finding.reviewedAt}${entry.finding.reviewBy === undefined ? "" : `, review by ${entry.finding.reviewBy}`}\n\n`,
+    );
+  }
+  for (const overdue of report.overdueReviews ?? []) {
+    process.stderr.write(`warning: accepted finding needs re-review: ${overdue}\n`);
+  }
+
+  const blocking = report.blocking
+    .filter((assessment) => !acceptedIds.has(assessment.advisory.id))
+    .map((assessment) => `${assessment.advisory.id} (${assessment.verdict})`);
+
+  if (blocking.length === 0) {
+    process.stdout.write(`OK  no reachable advisory at or above "${deny}"\n`);
+    return 0;
+  }
+
+  process.stdout.write(
+    `FAIL  ${String(blocking.length)} advisory at or above "${deny}" needs attention: ` +
+      `${blocking.join(", ")}\n`,
+  );
+  if (
+    report.undetermined.some((assessment) =>
+      report.blocking.some((entry) => entry.advisory.id === assessment.advisory.id),
+    )
+  ) {
+    process.stdout.write(
+      "note: undetermined verdicts block by default; pass --allow-undetermined to accept them\n",
+    );
+  }
+  return 1;
 }
 
 /**
