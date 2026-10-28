@@ -1,5 +1,7 @@
 # rea-client
 
+[![CI](https://github.com/SeanShaffer88/rea-client/actions/workflows/ci.yml/badge.svg)](https://github.com/SeanShaffer88/rea-client/actions/workflows/ci.yml)
+
 The **orchestration engine** for an air-gapped desktop client around
 [`morluto/rea`](https://github.com/morluto/rea) (Reverse Engineering Assistant).
 
