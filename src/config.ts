@@ -43,6 +43,10 @@ export interface AgentConfig {
   readonly maxToolResultChars: number;
   readonly toolScope: ToolScopeName;
   readonly customTools: readonly string[];
+  /** Maximum elements in any single outbound array argument. */
+  readonly maxArgumentArrayItems: number;
+  /** Maximum serialized size of outbound tool arguments, in bytes. */
+  readonly maxArgumentBytes: number;
 }
 
 export interface PolicyConfig {
@@ -90,6 +94,8 @@ export const DEFAULT_CONFIG: ReaClientConfig = {
     maxToolResultChars: 12_000,
     toolScope: "binary-core",
     customTools: [],
+    maxArgumentArrayItems: 256,
+    maxArgumentBytes: 65_536,
   },
   policy: {
     allowNonLoopback: false,
@@ -297,6 +303,22 @@ export function parseConfig(raw: unknown): ReaClientConfig {
       DEFAULT_CONFIG.agent.toolScope,
     ),
     customTools: optStringArray(agentRaw, "customTools", "agent") ?? [],
+    maxArgumentArrayItems: numInRange(
+      agentRaw,
+      "maxArgumentArrayItems",
+      "agent",
+      DEFAULT_CONFIG.agent.maxArgumentArrayItems,
+      1,
+      1_000_000,
+    ),
+    maxArgumentBytes: numInRange(
+      agentRaw,
+      "maxArgumentBytes",
+      "agent",
+      DEFAULT_CONFIG.agent.maxArgumentBytes,
+      256,
+      16_777_216,
+    ),
   };
 
   if (agent.toolScope === "custom" && agent.customTools.length === 0) {

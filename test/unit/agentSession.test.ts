@@ -377,3 +377,49 @@ describe("parseArguments", () => {
     if (!result.ok) expect(result.message).toContain("not valid JSON");
   });
 });
+
+describe("AgentSession — outbound argument guard", () => {
+  it("blocks an oversized array argument before it reaches the server", async () => {
+    const big = Array.from({ length: 5_000 }, (_, index) => `0x${index.toString(16)}`);
+    const chat = new ScriptedChat([
+      toolCallTurn("xrefs", { addresses: big }),
+      textTurn("blocked"),
+    ]);
+
+    const { agent, connection } = build({ chat });
+    const result = await agent.ask("analyze all of these");
+
+    // The tool was never dispatched: this is the compensating control for the
+    // zod unbounded-array advisory.
+    expect(connection.calls).toHaveLength(0);
+    expect(result.reason).toBe("final_answer");
+
+    const observation = agent.transcript().find((message) => message.role === "tool")?.content ?? "";
+    expect(observation).toContain("TOOL_ERROR");
+    expect(observation).toContain("item limit");
+  });
+
+  it("reports the guard rejection to the UI as a failed call", async () => {
+    const big = Array.from({ length: 5_000 }, () => 1);
+    const chat = new ScriptedChat([toolCallTurn("xrefs", { addresses: big }), textTurn("ok")]);
+    const { agent } = build({ chat });
+
+    const finished: AgentEvents["tool_call_finished"][] = [];
+    agent.on("tool_call_finished", (event) => finished.push(event));
+
+    await agent.ask("go");
+
+    expect(finished[0]?.ok).toBe(false);
+    expect(finished[0]?.elapsedMs).toBe(0);
+  });
+
+  it("still allows a large but bounded batch", async () => {
+    const batch = Array.from({ length: 50 }, (_, index) => `0x${index.toString(16)}`);
+    const chat = new ScriptedChat([toolCallTurn("xrefs", { addresses: batch }), textTurn("done")]);
+    const { agent, connection } = build({ chat });
+
+    await agent.ask("batch it");
+
+    expect(connection.calls).toHaveLength(1);
+  });
+});

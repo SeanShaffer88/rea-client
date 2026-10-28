@@ -36,6 +36,11 @@ import type {
 } from "../llm/types.js";
 import { Emitter } from "../util/emitter.js";
 import { previewOf, type AgentDoneReason, type AgentEvents } from "./events.js";
+import {
+  DEFAULT_GUARD_LIMITS,
+  checkToolArguments,
+  type ArgumentGuardLimits,
+} from "./argumentGuard.js";
 
 export interface AgentSessionOptions {
   readonly connection: McpConnection;
@@ -53,6 +58,11 @@ export interface AgentSessionOptions {
   readonly toolTimeoutMs?: number;
   /** Extra function definitions beyond the REA catalog (local utilities). */
   readonly extraTools?: readonly FunctionDefinition[];
+  /**
+   * Bounds on outbound tool arguments. Defaults are conservative; see
+   * `argumentGuard.ts` for why they exist.
+   */
+  readonly argumentLimits?: ArgumentGuardLimits;
 }
 
 export interface AskOptions {
@@ -278,6 +288,27 @@ export class AgentSession extends Emitter<AgentEvents> {
       return ToolObservation.fromError(message);
     }
 
+    // Bound the payload before it reaches the server's validator. A hostile
+    // target can steer the model into emitting a huge array; this is where that
+    // stops.
+    const guard = checkToolArguments(
+      parsed.value,
+      this.options.argumentLimits ?? DEFAULT_GUARD_LIMITS,
+    );
+    if (!guard.ok) {
+      this.emit("tool_call_finished", {
+        id: call.id,
+        name: functionName,
+        mcpName,
+        ok: false,
+        elapsedMs: 0,
+        truncated: false,
+        evidenceId: undefined,
+        preview: guard.message,
+      });
+      return ToolObservation.fromError(guard.message);
+    }
+
     this.emit("tool_call_started", {
       id: call.id,
       name: functionName,
@@ -454,6 +485,10 @@ export function createAgentSession(
     model: config.llm.model,
     maxIterations: config.agent.maxIterations,
     maxToolResultChars: config.agent.maxToolResultChars,
+    argumentLimits: {
+      maxArrayItems: config.agent.maxArgumentArrayItems,
+      maxBytes: config.agent.maxArgumentBytes,
+    },
     temperature: config.llm.temperature,
     maxTokens: config.llm.maxTokens,
     contextWindow: config.llm.contextWindow,
