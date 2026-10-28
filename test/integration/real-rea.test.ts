@@ -22,6 +22,18 @@ import type { McpToolDefinition } from "../../src/mcp/types.js";
 const REA_ENTRY = resolve("node_modules/rea-agents/scripts/rea.mjs");
 const hasRea = existsSync(REA_ENTRY);
 
+// These are the only tests that exercise the real MCP protocol, the live tool
+// catalog, and REA's real error envelopes. A missing server must not quietly
+// turn them into a green "skipped" result in CI, where the package is always
+// installed by `npm ci`. Local runs without the package may still skip.
+if (!hasRea && process.env["CI"] === "true") {
+  throw new Error(
+    `rea-agents is not installed at ${REA_ENTRY}, so the real-server integration ` +
+      `coverage would silently disappear. Run \`npm ci\` (rea-agents is a devDependency) ` +
+      `or remove the CI environment variable to skip these tests locally.`,
+  );
+}
+
 /** A real ELF binary that exists on every Linux CI image. */
 const SYSTEM_BINARY = "/usr/bin/ls";
 
