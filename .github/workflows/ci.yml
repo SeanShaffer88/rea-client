@@ -54,6 +54,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Guards the dependency itself: if the installed rea-agents tree differs
+      # from the reviewed one -- a post-install script, a partial upgrade, a
+      # tampered tarball -- the rest of the suite would be testing code nobody
+      # approved. Placed after the build because it runs dist/cli.js.
+      - name: Verify vendored dependency
+        run: node dist/cli.js vendor verify node_modules/rea-agents --manifest vendor/rea-agents.manifest.json
+
       # Both vitest projects: unit, plus integration against a real rea-agents
       # MCP server over stdio and a real HTTP model server.
       - name: Test
