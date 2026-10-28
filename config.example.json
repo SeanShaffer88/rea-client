@@ -1,0 +1,30 @@
+{
+  "rea": {
+    "transport": "stdio",
+    "command": "node",
+    "args": ["rea/scripts/rea.mjs", "mcp"],
+    "env": {
+      "NODE_ENV": "production",
+      "REA_LOG_LEVEL": "info"
+    },
+    "startupTimeoutSec": 45
+  },
+  "llm": {
+    "baseUrl": "http://127.0.0.1:8080/v1",
+    "model": "qwen2.5-coder-14b-instruct-q5_k_m",
+    "temperature": 0.1,
+    "maxTokens": 1536,
+    "contextWindow": 16384,
+    "requestTimeoutMs": 180000
+  },
+  "agent": {
+    "maxIterations": 8,
+    "maxToolResultChars": 12000,
+    "toolScope": "binary-core",
+    "customTools": []
+  },
+  "policy": {
+    "allowNonLoopback": false
+  },
+  "workspaceDir": "workspace"
+}

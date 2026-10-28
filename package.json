@@ -1,0 +1,43 @@
+{
+  "name": "rea-client",
+  "version": "0.1.0",
+  "description": "Air-gapped desktop client engine for REA (Reverse Engineering Assistant): MCP orchestration, local-LLM agent loop, and evidence projection.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "bin": {
+    "rea-client": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:all": "vitest run",
+    "check": "npm run typecheck && npm run test:all",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "rea-agents": "6.8.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
