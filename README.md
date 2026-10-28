@@ -46,6 +46,7 @@ Verified in this repository against **rea-agents 6.8.0**, MCP protocol
 | OpenAI-compatible streaming client (SSE, chunk splitting, UTF-8 boundaries, timeouts, aborts) | **Tested** over a real TCP socket |
 | CLI exit codes, `--json` output, stream separation | **Tested** by spawning the built CLI as a subprocess |
 | `doctor` verdicts (policy, workspace, MCP, providers, model) | **Tested** in-process and against the live server |
+| Vendor manifest + offline verification | **Verified** — installed tree matches the published tarball exactly (2398 files) |
 | Windows path canonicalization | **Unit-tested on Linux** via `path.win32`; **not executed on Windows** |
 | Rust/egui shell, packaging pipeline, model bundling | **Not built** — see [Scope](#scope) |
 
@@ -106,6 +107,8 @@ server:
 | Command | Purpose |
 | --- | --- |
 | `doctor` | Node version, air-gap policy, workspace, MCP connect + inventory, provider availability, model endpoint |
+| `vendor manifest` | Record a hash manifest for a vendored dependency, anchored to the published tarball |
+| `vendor verify` | Check a vendored tree against its manifest, offline |
 | `tools` | Catalog grouped by family, plus the advertised scope and anything missing |
 | `probe <binary>` | `open_binary` + `binary_overview`, no model needed |
 | `ask "<question>"` | Full agent loop with streamed output |
@@ -174,6 +177,14 @@ enforced at config load, not just documented.
 **CI actions are pinned to commit SHAs**, with Dependabot keeping the pins
 current — a retagged or compromised action tag cannot inject code into the
 build of a tool that analyzes untrusted binaries.
+
+**The vendored `rea-agents` tree is verified, not trusted.**
+`vendor/rea-agents.manifest.json` records a sha256 for all 2398 files, anchored
+to the sha512 integrity npm published for the tarball. CI re-hashes the installed
+tree before running any test against it, so a post-install script, a partial
+upgrade, or a tampered tarball fails the build instead of silently becoming the
+code under test. Verification is offline — the shipped bundle needs no network.
+See [docs/supply-chain.md](docs/supply-chain.md).
 
 ## Scope
 
