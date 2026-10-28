@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Runtime state, not source
+workspace/
+config.local.json
+logs/
+*.gguf
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
