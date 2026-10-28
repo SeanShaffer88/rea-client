@@ -108,4 +108,34 @@ export type {
 } from "./llm/types.js";
 
 export { runDoctor, type CheckResult, type CheckStatus, type DoctorReport } from "./doctor.js";
+
+// Packaging / supply chain
+export {
+  MANIFEST_SCHEMA_VERSION,
+  ManifestError,
+  assertManifestShape,
+  buildManifest,
+  parseManifest,
+  serializeManifest,
+  sha256,
+  verifyManifest,
+  type BuildManifestOptions,
+  type ManifestFile,
+  type VendorManifest,
+  type VerifyResult,
+} from "./packaging/manifest.js";
+export {
+  RegistryError,
+  buildAnchoredManifest,
+  compareDirectoryToTarball,
+  downloadTarball,
+  fetchPackument,
+  manifestFilesFromTarball,
+  readPackageIdentity,
+  type Packument,
+  type RegistryOptions,
+  type TarballComparison,
+  type TarballData,
+} from "./packaging/registry.js";
+export { TarError, normalizeEntryPath, readTarball, type TarEntry } from "./packaging/tar.js";
 export { Emitter } from "./util/emitter.js";
