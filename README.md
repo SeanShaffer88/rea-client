@@ -42,13 +42,20 @@ Verified in this repository against **rea-agents 6.8.0**, MCP protocol
 | REA error contract (relative-path rejection, missing file) | **Verified** — real envelopes, asserted in tests |
 | `open_binary` on a real ELF, provider-unavailable degradation | **Verified** |
 | Evidence projection, truncation, untrusted-content marking | **Unit-tested** |
-| Agent loop (tool calls, recovery, pruning, cancellation) | **Unit-tested** against scripted transports |
-| OpenAI-compatible streaming client | **Unit-tested** against scripted SSE |
+| Agent loop (tool calls, recovery, pruning, cancellation) | **Unit-tested** against scripted transports, and **integration-tested** end-to-end over a real HTTP model socket |
+| OpenAI-compatible streaming client (SSE, chunk splitting, UTF-8 boundaries, timeouts, aborts) | **Tested** over a real TCP socket |
+| CLI exit codes, `--json` output, stream separation | **Tested** by spawning the built CLI as a subprocess |
+| `doctor` verdicts (policy, workspace, MCP, providers, model) | **Tested** in-process and against the live server |
 | Windows path canonicalization | **Unit-tested on Linux** via `path.win32`; **not executed on Windows** |
 | Rust/egui shell, packaging pipeline, model bundling | **Not built** — see [Scope](#scope) |
 
-Anything marked "unit-tested" has not been run against a live model server or on
-Windows. Treat those as designed-and-tested-in-isolation, not proven.
+Anything marked "unit-tested" has not been run against a live `llama-server`
+process or on Windows. The model client is exercised against a real HTTP server
+speaking the same protocol, but not against llama.cpp itself.
+
+Coverage (v8, `npm run test:coverage`): **88% statements, 90% lines, 78%
+branches**. Thresholds in `vitest.config.ts` are a ratchet set just below that
+floor, so a regression fails CI.
 
 ## What changed from the original blueprint
 
@@ -164,6 +171,10 @@ instruction-like strings inside a hostile binary read as data, not as orders.
 **Only loopback endpoints are allowed by default.** The air-gap claim is
 enforced at config load, not just documented.
 
+**CI actions are pinned to commit SHAs**, with Dependabot keeping the pins
+current — a retagged or compromised action tag cannot inject code into the
+build of a tool that analyzes untrusted binaries.
+
 ## Scope
 
 Built here: the engine, its tests, and the headless CLI.
@@ -177,13 +188,23 @@ the integration point those tiers should consume.
 ## Development
 
 ```bash
-npm run typecheck     # tsc (TypeScript 7)
-npm test              # unit tests
-npm run test:integration   # real rea-agents MCP server
-npm run check         # both, plus typecheck
+npm run typecheck       # tsc (TypeScript 7)
+npm test                # unit tests
+npm run build           # required before the CLI integration tests
+npm run test:integration  # real rea-agents MCP server + real HTTP model server
+npm run test:coverage   # both projects with v8 coverage and thresholds
+npm run check           # typecheck + both test projects
 ```
 
-Integration tests skip automatically when `rea-agents` is not installed.
+Integration tests skip automatically when `rea-agents` is not installed **or**
+when `dist/` has not been built — but they hard-fail if `CI` is set, so CI can
+never silently lose that coverage. CI runs typecheck, build, tests, then
+coverage in that order for exactly this reason.
+
+The four core behaviours that would otherwise fail silently are locked down by
+tests rather than convention: SSE frames split across TCP segments, multi-byte
+characters split across segments, tool-call arguments arriving in fragments, and
+failed tool calls being returned to the model instead of aborting the turn.
 
 ## License
 

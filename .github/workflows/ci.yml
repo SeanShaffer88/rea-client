@@ -22,13 +22,13 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Node 24 matches rea-agents' declared range (^22.23.4 || ^24.22.1 ||
       # >=26.12.1) and the .nvmrc in the upstream REA checkout. Node 22 works
       # but emits EBADENGINE warnings below 22.23.4, which would bury real noise.
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           cache: npm
@@ -45,14 +45,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # `check` = tsc --noEmit, then `vitest run` across both projects.
-      # The integration project drives a real rea-agents MCP server over stdio
-      # and self-skips only when the package is absent, which cannot happen
-      # after `npm ci` because it is a devDependency.
-      - name: Typecheck and test
-        run: npm run check
+      - name: Typecheck
+        run: npm run typecheck
 
-      # The build is a separate tsconfig (src only) and can fail independently
-      # of typecheck, so it gets its own step.
+      # Build must precede tests: the CLI integration tests execute dist/cli.js
+      # as a subprocess, and those tests hard-fail when CI is set but dist/ is
+      # missing, so this ordering is enforced rather than assumed.
       - name: Build
         run: npm run build
+
+      # Both vitest projects: unit, plus integration against a real rea-agents
+      # MCP server over stdio and a real HTTP model server.
+      - name: Test
+        run: npm run test:all
+
+      # Re-runs the suite under v8 coverage. The thresholds in vitest.config.ts
+      # are a ratchet set just below the current floor, so a regression fails
+      # the build rather than eroding coverage unnoticed.
+      - name: Coverage
+        run: npm run test:coverage
