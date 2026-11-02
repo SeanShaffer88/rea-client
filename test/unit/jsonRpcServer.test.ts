@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -563,7 +563,8 @@ describe("EngineRpcServer — retained evidence", () => {
         }
         if (name === "export_evidence_bundle") {
           const path = String(args["path"] ?? "");
-          if (!path.startsWith("/")) {
+          // Windows absolute paths are `C:\…`, so ask the platform, not for a slash.
+          if (!isAbsolute(path)) {
             return { isError: true, content: [{ type: "text", text: "path must be absolute" }] };
           }
           return { structuredContent: { result: { path, bytes: 8117, records: 2, unknowns: 0 } } };
