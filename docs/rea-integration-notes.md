@@ -209,3 +209,26 @@ The engine supports both (`rea.transport = "stdio" | "http"`).
 - **`binary_session` is cheap and authoritative** for open state, provider
   binding, and catalog identity; call it after every `open_binary` rather than
   tracking state client-side.
+
+## 9. Desktop bridge observations
+
+Verified through `rea-client serve` and the desktop gateway against the same
+live server:
+
+- **Frame budget.** The full tool definitions payload is **3,504,973 bytes**
+  (229 tools), larger than the bridge's original 1 MiB frame limit. The desktop
+  supervisor raised its limit to 8 MiB and the catalog fetches lightweight
+  entries by default; `tools.describe` loads one full schema on demand.
+- **`binary_overview` can fail while the target is open.** On this Linux host
+  only `rea-artifact-graph` and `rea-dotnet-static` were available, so an ELF
+  opened successfully (`elf`, `x86_64`, SHA-256) but the overview call returned
+  `provider_unavailable`. `target.probe` therefore reports `{ ok: true,
+  overview: null, overviewError }` rather than surfacing an error string as
+  analysis output. The UI renders that distinction explicitly.
+- **Event correlation.** `agent.ask` accepts `clientRequestId` so streamed
+  `agent.event` notifications can be tied to the renderer's optimistic message
+  instead of the bridge's numeric JSON-RPC id.
+- **Doctor can say "providers ok" while a specific analysis path is
+  unavailable.** The providers check means at least one provider is registered;
+  it is not a per-format guarantee. The UI keeps the per-call failure visible
+  instead of inferring capability from the aggregate check.

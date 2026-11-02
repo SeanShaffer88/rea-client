@@ -6,7 +6,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["test/unit/**/*.test.ts"],
+          include: ["test/unit/**/*.test.ts", "test/unit/**/*.test.tsx"],
           environment: "node",
           testTimeout: 15_000,
         },
@@ -27,10 +27,17 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      // `cli.ts` is an entry point whose behaviour is asserted by spawning it as
-      // a subprocess (test/integration/cli.test.ts), which in-process v8
-      // coverage cannot observe. `index.ts` is re-exports only.
-      exclude: ["src/cli.ts", "src/index.ts", "src/**/types.ts"],
+      // `cli.ts` and `desktop/server.ts` are entry points whose behaviour is
+      // asserted by spawning them as subprocesses, which in-process v8 coverage
+      // cannot observe. `index.ts` is re-exports only, `protocol.ts` is a
+      // type-only contract, and `types.ts` modules are declarations.
+      exclude: [
+        "src/cli.ts",
+        "src/index.ts",
+        "src/**/types.ts",
+        "src/desktop/server.ts",
+        "src/desktop/protocol.ts",
+      ],
       reporter: ["text", "json-summary"],
       // A ratchet, not an aspiration: set just below the measured floor so a
       // regression fails the build instead of quietly eroding coverage.

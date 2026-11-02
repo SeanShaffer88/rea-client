@@ -442,6 +442,9 @@ export class EngineRpcServer {
       case "tools.list":
         return this.handleToolsList(params);
 
+      case "tools.describe":
+        return this.handleToolsDescribe(params);
+
       case "target.session":
         return this.handleTargetSession();
 
@@ -655,11 +658,25 @@ export class EngineRpcServer {
         ? this.activeScopeName
         : this.validateScopeName(params["scope"]);
 
+    const includeDetails = params["includeDetails"];
+    if (includeDetails !== undefined && typeof includeDetails !== "boolean") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"includeDetails" must be a boolean when provided.');
+    }
     const { catalog } = await this.ensureConnected();
     const resolved = catalog.resolveScope(scopeName, this.config.agent.customTools);
 
     return {
       total: catalog.size,
+      // Full schemas are fetched one at a time by tools.describe. The complete
+      // REA inventory is several MiB, too large for the default stdio frame.
+      ...(includeDetails === true ? { entries: catalog.all().map((tool) => ({
+        name: tool.name,
+        title: tool.title ?? tool.name,
+        description: tool.description ?? "",
+        family: catalog.familyOf(tool.name),
+        readOnly: tool.annotations?.["readOnlyHint"] === true,
+        destructive: tool.annotations?.["destructiveHint"] === true,
+      })) } : {}),
       families: catalog.populatedFamilies().map((group) => ({
         id: group.id,
         label: group.label,
@@ -672,8 +689,23 @@ export class EngineRpcServer {
         name: resolved.scope,
         count: resolved.tools.length,
         missing: resolved.missing,
+        ...(includeDetails === true ? { names: resolved.tools.map((tool) => tool.name) } : {}),
       },
     };
+  }
+
+  private async handleToolsDescribe(params: Record<string, unknown>): Promise<unknown> {
+    const name = params["name"];
+    if (typeof name !== "string" || name.trim() === "") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" is required and must be a non-empty string.');
+    }
+    const { catalog } = await this.ensureConnected();
+    const tool = catalog.get(name);
+    if (tool === undefined) {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, `Tool is not in the live catalog: ${name}`);
+    }
+    const scope = catalog.resolveScope(this.activeScopeName, this.config.agent.customTools);
+    return { tool, family: catalog.familyOf(name), inScope: scope.tools.some((entry) => entry.name === name) };
   }
 
   private async handleTargetSession(): Promise<unknown> {
@@ -756,15 +788,27 @@ export class EngineRpcServer {
       };
     }
 
-    const overviewObservation = catalog.has("binary_overview")
-      ? projectToolResult(await connection.callTool("binary_overview", {}), { maxChars: 6_000 })
-      : undefined;
+    let overview: string | null = null;
+    let overviewError: string | undefined;
+    if (catalog.has("binary_overview")) {
+      const rawOverview = await connection.callTool("binary_overview", {});
+      const overviewObservation = projectToolResult(rawOverview, { maxChars: 6_000 });
+      if (rawOverview.isError === true || overviewObservation.text.startsWith(ToolObservation.errorPrefix)) {
+        // A target can open successfully while its inspection provider is
+        // unavailable. Report that honestly instead of presenting an error
+        // string as if it were an overview.
+        overviewError = overviewObservation.text;
+      } else {
+        overview = overviewObservation.text;
+      }
+    }
 
     return {
       ok: true,
       open: openObservation.text,
       session: serializeSession(session),
-      overview: overviewObservation?.text ?? null,
+      overview,
+      ...(overviewError === undefined ? {} : { overviewError }),
     };
   }
 
@@ -797,8 +841,22 @@ export class EngineRpcServer {
       );
     }
 
+    const clientRequestId = params["clientRequestId"];
+    if (
+      clientRequestId !== undefined &&
+      (typeof clientRequestId !== "string" || clientRequestId.length === 0 || clientRequestId.length > 128)
+    ) {
+      throw new JsonRpcException(
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        '"clientRequestId" must be a non-empty string of at most 128 characters when provided.',
+      );
+    }
+
     const agent = await this.ensureAgent(requestedScope, extraInstructions);
-    const unsubs = this.forwardAgentEvents(agent, requestId);
+    // A desktop client can correlate streamed events with its own optimistic
+    // message id. Without it, events carry the JSON-RPC request id so existing
+    // stdio clients keep their current behaviour.
+    const unsubs = this.forwardAgentEvents(agent, clientRequestId ?? requestId);
     const controller = new AbortController();
     this.activeTurnAbort = controller;
 
@@ -826,6 +884,9 @@ export class EngineRpcServer {
 
     return [
       agent.on("assistant_delta", (data) => emitEvent("assistant_delta", data)),
+      agent.on("iteration", (data) => emitEvent("iteration", data)),
+      agent.on("context_pruned", (data) => emitEvent("context_pruned", data)),
+      agent.on("error", (data) => emitEvent("error", data)),
       agent.on("tool_call_started", (data) => emitEvent("tool_call_started", data)),
       agent.on("tool_call_finished", (data) => emitEvent("tool_call_finished", data)),
       agent.on("done", (data) => emitEvent("done", data)),
