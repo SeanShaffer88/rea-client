@@ -2,7 +2,10 @@ import type { Bootstrap, DesktopEvent } from "../../src/desktop/protocol";
 
 declare global {
   interface Window {
-    reaDesktop?: { chooseBinary: () => Promise<string | null> };
+    reaDesktop?: {
+      chooseBinary: () => Promise<string | null>;
+      pathForFile?: (file: File) => string;
+    };
   }
 }
 
@@ -91,11 +94,22 @@ export async function rpc<T>(method: string, params: Record<string, unknown> = {
 
 export async function uploadBinary(file: File): Promise<{ path: string; name: string; size: number }> {
   for (let attempt = 0; ; attempt += 1) {
-    const response = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream", "X-REA-Token": token },
-      body: file,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream", "X-REA-Token": token },
+        body: file,
+      });
+    } catch {
+      // Streaming a File can fail before any bytes leave the page (an embedded
+      // browser without Blob.stream, a dropped connection). Say what to do next
+      // instead of surfacing "fetch failed" or a stream TypeError.
+      throw new WorkspaceApiError(
+        `The file could not be uploaded. Open it by path instead: choose “Open binary” and enter the absolute path to ${file.name}.`,
+        0,
+      );
+    }
     const body = await readJson<{ error?: string; path?: string; name?: string; size?: number }>(response);
     if (response.status === 401 && attempt === 0) {
       await refreshSession();

@@ -71,5 +71,10 @@ describe("workspace API client", () => {
 
     vi.stubGlobal("fetch", async () => respond(200, { unexpected: true }));
     await expect(uploadBinary(file)).rejects.toThrow(/incomplete/);
+
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("object.stream is not a function");
+    });
+    await expect(uploadBinary(file)).rejects.toThrow(/could not be uploaded.*open it by path/i);
   });
 });

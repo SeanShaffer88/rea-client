@@ -205,6 +205,9 @@ describe("App", () => {
 
     await act(async () => buttonWith("Open binary")?.click());
     await waitFor("dialog", () => document.querySelector("dialog[open]") !== null);
+    // Focus moves into the modal so keyboard users are not left behind it.
+    expect(document.querySelector("dialog[open]")?.contains(document.activeElement)).toBe(true);
+    expect(document.querySelector("dialog[open]")?.getAttribute("aria-modal")).toBe("true");
     const input = document.querySelector("#target-path") as HTMLInputElement;
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -242,6 +245,83 @@ describe("App", () => {
     expect(document.querySelectorAll(".chat-message.message-assistant")[0]?.textContent).toContain("Nothing yet.");
     expect(document.querySelector(".toast")?.textContent).toContain("Previous conversation restored");
     expect(document.querySelector(".message-footer")).toBeNull();
+  });
+
+  it("exports a Markdown analysis report and a JSON companion", async () => {
+    installFetch({
+      "agent.transcript": () => ({
+        body: {
+          result: {
+            messages: [
+              { role: "user", content: "What is open?" },
+              { role: "assistant", content: "An ELF binary." },
+            ],
+          },
+        },
+      }),
+    });
+    const blobs: Array<{ type: string; text: string }> = [];
+    const names: string[] = [];
+    vi.stubGlobal("URL", Object.assign(URL, {
+      createObjectURL: (blob: Blob) => {
+        blobs.push({ type: blob.type, text: "" });
+        // Blob.text() is async; capture synchronously through the array index later.
+        void blob.text().then((text) => { const entry = blobs[blobs.length - 1]; if (entry && entry.text === "") entry.text = text; });
+        return `blob:${blobs.length}`;
+      },
+      revokeObjectURL: () => undefined,
+    }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function click(this: HTMLAnchorElement) {
+      names.push(this.download);
+    });
+
+    try {
+      await render();
+      await waitFor("restored conversation", () => document.querySelectorAll(".chat-message").length === 2);
+      await act(async () => buttonWith("Evidence")?.click());
+      await waitFor("evidence page", () => document.querySelector(".evidence-page") !== null);
+      await act(async () => buttonWith("Export report")?.click());
+      await act(async () => buttonWith("JSON")?.click());
+
+      await waitFor("both exports", () => names.length === 2);
+      expect(names[0]).toMatch(/^rea-analysis-\d{4}-\d{2}-\d{2}\.md$/);
+      expect(names[1]).toMatch(/^rea-analysis-\d{4}-\d{2}-\d{2}\.json$/);
+      await waitFor("markdown blob", () => blobs.some((blob) => blob.type.startsWith("text/markdown") && blob.text.includes("# REA analysis report")));
+      await waitFor("json blob", () => blobs.some((blob) => blob.type === "application/json" && blob.text.includes("\"schemaVersion\"")));
+      expect(document.querySelector(".toast")?.textContent).toContain("exported");
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it("shows a drop target while files hover and explains a rejected drop", async () => {
+    installFetch();
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+
+    const dragOver = new window.Event("dragover", { bubbles: true, cancelable: true }) as Event & { dataTransfer?: { types: string[] } };
+    dragOver.dataTransfer = { types: ["Files"] };
+    await act(async () => {
+      window.dispatchEvent(dragOver);
+    });
+    expect(dragOver.defaultPrevented).toBe(true);
+    expect(document.querySelector(".drop-overlay")).not.toBeNull();
+    expect(document.querySelector(".drop-overlay")?.textContent).toContain("Drop to upload to this workspace");
+
+    const drop = new window.Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer?: { types: string[]; files: unknown[] } };
+    drop.dataTransfer = { types: ["Files"], files: [] };
+    await act(async () => {
+      window.dispatchEvent(drop);
+    });
+    expect(document.querySelector(".drop-overlay")).toBeNull();
+
+    // A single empty file is reported, not opened or uploaded.
+    const emptyDrop = new window.Event("drop", { bubbles: true, cancelable: true }) as Event & { dataTransfer?: { types: string[]; files: unknown[] } };
+    emptyDrop.dataTransfer = { types: ["Files"], files: [new File([], "empty.bin")] };
+    await act(async () => {
+      window.dispatchEvent(emptyDrop);
+    });
+    expect(document.querySelector(".error-notice")?.textContent).toContain("empty");
   });
 
   it("disables the composer when the local model fails diagnostics", async () => {

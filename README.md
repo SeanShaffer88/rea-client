@@ -156,10 +156,12 @@ UI and the same supervised `rea-client serve` child process:
   `REA_PREVIEW_TOKEN` when a preview URL can be shared; without it the preview
   is open to anyone who can reach the host.
 
-The workspace opens binaries by path or (browser only) upload, streams agent
+The workspace opens binaries by path, by dropping a file on the window, or
+(browser only) by upload, streams agent
 deltas and tool calls over authenticated SSE, exposes the live 229-tool catalog
 with lazily loaded schemas, shows projected evidence and evidence IDs, runs
-diagnostics with remediation, and exports a local JSON report. The renderer has
+diagnostics with remediation, and exports a Markdown analysis report plus a
+versioned JSON companion. The renderer has
 no Node, filesystem, or arbitrary IPC access: Electron runs with sandbox and
 context isolation, the preload exposes exactly one file-dialog method, and all
 state changes pass an allowlisted, token-authenticated HTTP gateway.

@@ -17,21 +17,49 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
   useEffect(() => { if (!copied && !failed) return; const timer = setTimeout(() => { setCopied(false); setFailed(false); }, 2000); return () => clearTimeout(timer); }, [copied, failed]);
   return <button className="copy-button" aria-label={label} title={label} onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); } catch { setFailed(true); } }}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copied" : failed ? "Select to copy" : null}</button>;
 }
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function Modal({ title, subtitle, children, onClose }: { title: string; subtitle?: string; children: ReactNode; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // jsdom and older embedded Chromium builds lack <dialog> methods; fall back
     // to the `open` attribute so the modal still renders and can be dismissed.
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
+    const focusables = (): HTMLElement[] =>
+      [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((element) => !element.hasAttribute("hidden"));
+    // Native <dialog> traps focus in a browser, but the attribute fallback does
+    // not; do it explicitly so both paths behave the same.
+    const first = focusables()[0];
+    (first ?? dialog).focus?.();
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      if (firstItem === undefined || lastItem === undefined) return;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === firstItem || active === dialog)) {
+        event.preventDefault();
+        lastItem.focus();
+      } else if (!event.shiftKey && active === lastItem) {
+        event.preventDefault();
+        firstItem.focus();
+      }
+    };
+    dialog.addEventListener("keydown", onKeyDown);
     return () => {
+      dialog.removeEventListener("keydown", onKeyDown);
       if (typeof dialog.close === "function") dialog.close();
       else dialog.removeAttribute("open");
+      previouslyFocused?.focus?.();
     };
   }, []);
-  return <dialog ref={ref} className="modal" onCancel={onClose} onClick={(event) => { if (event.target === ref.current) onClose(); }} aria-labelledby="modal-title">
+  return <dialog ref={ref} className="modal" onCancel={onClose} onClick={(event) => { if (event.target === ref.current) onClose(); }} aria-labelledby="modal-title" aria-modal="true">
     <div className="modal-inner"><header className="modal-header"><div><h2 id="modal-title">{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20} /></button></header>{children}</div>
   </dialog>;
 }

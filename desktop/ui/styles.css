@@ -3644,6 +3644,52 @@ kbd {
   padding: 2px 6px;
 }
 
+/* ---------------------------------------------------------- drop target ---- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 32, 27, 0.55);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+  animation: rea-fade-up 0.12s ease both;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  padding: 30px 34px;
+  border-radius: 16px;
+  border: 2px dashed var(--accent-line);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  max-width: 440px;
+}
+
+.drop-overlay-card > svg {
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.drop-overlay-card strong {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.drop-overlay-card span {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
 /* --------------------------------------------------------------- toast ---- */
 
 .toast {
