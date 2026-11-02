@@ -190,6 +190,37 @@ describe("DesktopGateway", () => {
     expect(JSON.parse(failed.body)).toEqual({ error: "engine offline" });
   });
 
+  it("exposes retained evidence reads but bounds what reaches the engine", async () => {
+    const { port, token, bridge } = await start();
+    const call = async (payload: Record<string, unknown>) =>
+      send(port, "/api/rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-REA-Token": token },
+        body: JSON.stringify(payload),
+      });
+
+    const evidenceId = `ev_${"ab".repeat(32)}`;
+    const listed = await call({ method: "evidence.list" });
+    expect(listed.status).toBe(200);
+    expect(bridge.requests.at(-1)).toEqual({ method: "evidence.list", params: {} });
+
+    const record = await call({ method: "evidence.get", params: { evidenceId } });
+    expect(record.status).toBe(200);
+    expect(bridge.requests.at(-1)).toEqual({ method: "evidence.get", params: { evidenceId } });
+
+    const exported = await call({ method: "evidence.export", params: { overwrite: true } });
+    expect(exported.status).toBe(200);
+    expect(bridge.requests.at(-1)).toEqual({ method: "evidence.export", params: { overwrite: true } });
+
+    // A missing id or an unbounded export name never leaves the gateway.
+    expect((await call({ method: "evidence.get", params: {} })).status).toBe(400);
+    expect((await call({ method: "evidence.get", params: { evidenceId: 7 } })).status).toBe(400);
+    expect((await call({ method: "evidence.get", params: { evidenceId: "e".repeat(129) } })).status).toBe(400);
+    expect((await call({ method: "evidence.export", params: { name: "x".repeat(97) } })).status).toBe(400);
+    expect((await call({ method: "evidence.export", params: { name: 12 } })).status).toBe(400);
+    expect(bridge.requests.at(-1)?.method).toBe("evidence.export");
+  });
+
   it("replays retained events and enforces the listener cap", async () => {
     const { port, token, bridge } = await start();
     bridge.history = [

@@ -12,6 +12,8 @@
  *   - Oversized frames fail closed (`-32700`) before unbounded buffering.
  */
 
+import { mkdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { ReaClientConfig, ToolScopeName } from "../config.js";
 import { runDoctor, type DoctorOptions, type DoctorReport } from "../doctor.js";
 import { AgentSession, createAgentSession } from "../agent/AgentSession.js";
@@ -21,6 +23,11 @@ import { LlamaServerClient } from "../llm/LlamaServerClient.js";
 import type { ChatMessage, ChatTransport } from "../llm/types.js";
 import { ToolCatalog, type ScopeResolution } from "../mcp/catalog.js";
 import { ToolObservation, projectToolResult } from "../mcp/evidence.js";
+import {
+  readEvidenceSummary,
+  readExportedBundle,
+  selectEvidenceRecord,
+} from "../mcp/evidenceBundle.js";
 import { ReaClient, type McpConnection } from "../mcp/ReaClient.js";
 import { readBinarySession } from "../mcp/session.js";
 import type { BinarySessionSummary } from "../mcp/types.js";
@@ -113,6 +120,8 @@ interface ConnectedState {
 }
 
 const DEFAULT_MAX_LINE_BYTES = 1_048_576;
+/** Display ceiling for one retained evidence record in the desktop UI. */
+const EVIDENCE_RECORD_MAX_CHARS = 200_000;
 const VALID_SCOPES: readonly ToolScopeName[] = [
   "binary-core",
   "binary-extended",
@@ -445,6 +454,15 @@ export class EngineRpcServer {
       case "tools.describe":
         return this.handleToolsDescribe(params);
 
+      case "evidence.list":
+        return this.handleEvidenceList();
+
+      case "evidence.get":
+        return this.handleEvidenceGet(params);
+
+      case "evidence.export":
+        return this.handleEvidenceExport(params);
+
       case "target.session":
         return this.handleTargetSession();
 
@@ -706,6 +724,143 @@ export class EngineRpcServer {
     }
     const scope = catalog.resolveScope(this.activeScopeName, this.config.agent.customTools);
     return { tool, family: catalog.familyOf(name), inScope: scope.tools.some((entry) => entry.name === name) };
+  }
+
+  private requireEvidenceTool(catalog: ToolCatalog, name: string): void {
+    if (catalog.has(name)) return;
+    throw new JsonRpcException(
+      JSON_RPC_ERRORS.SERVER_ERROR,
+      `Connected REA server does not advertise "${name}".`,
+    );
+  }
+
+  private validateEvidenceId(raw: unknown): string {
+    if (typeof raw !== "string" || !/^ev_[a-f0-9]{64}$/.test(raw)) {
+      throw new JsonRpcException(
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        '"evidenceId" must be a retained REA evidence id: "ev_" followed by 64 lowercase hex characters.',
+      );
+    }
+    return raw;
+  }
+
+  private async handleEvidenceList(): Promise<unknown> {
+    const { connection, catalog } = await this.ensureConnected();
+    this.requireEvidenceTool(catalog, "get_evidence_bundle");
+    const raw = await connection.callTool("get_evidence_bundle", { detail: "summary" });
+    const inventory = readEvidenceSummary(raw);
+    const projected = projectToolResult(raw, { maxChars: 2_000 });
+    const failed =
+      raw.isError === true || projected.text.startsWith(ToolObservation.errorPrefix);
+    if (failed || inventory === undefined) {
+      return {
+        ok: false,
+        error: projected.text,
+        totalRetained: 0,
+        matching: 0,
+        unknownRevisions: 0,
+        records: [],
+      };
+    }
+    return { ok: true, ...inventory };
+  }
+
+  private async handleEvidenceGet(params: Record<string, unknown>): Promise<unknown> {
+    const evidenceId = this.validateEvidenceId(params["evidenceId"]);
+    const { connection, catalog } = await this.ensureConnected();
+    this.requireEvidenceTool(catalog, "get_evidence_bundle");
+
+    // Confirm the id is retained before pulling a payload, so "not found" is a
+    // clear answer rather than a large ambiguous bundle.
+    const summaryRaw = await connection.callTool("get_evidence_bundle", {
+      detail: "summary",
+      filters: { evidence_id: evidenceId },
+    });
+    const inventory = readEvidenceSummary(summaryRaw);
+    if (summaryRaw.isError !== true && inventory !== undefined && inventory.matching === 0) {
+      return {
+        ok: false,
+        evidenceId,
+        text: "",
+        truncated: false,
+        untrusted: true,
+        error: "REA has no retained evidence with that id in this session.",
+      };
+    }
+
+    const raw = await connection.callTool("get_evidence_bundle", {
+      detail: "complete",
+      filters: { evidence_id: evidenceId },
+    });
+    const projected = projectToolResult(raw, { maxChars: 2_000 });
+    const failed = raw.isError === true || projected.text.startsWith(ToolObservation.errorPrefix);
+    if (failed) {
+      return { ok: false, evidenceId, text: projected.text, truncated: false, untrusted: true, error: projected.text };
+    }
+
+    const record = selectEvidenceRecord(raw, evidenceId);
+    if (record === undefined) {
+      return {
+        ok: false,
+        evidenceId,
+        text: projected.text,
+        truncated: false,
+        untrusted: true,
+        error: "The bundle did not contain the requested evidence record.",
+      };
+    }
+
+    const serialized = JSON.stringify(record, null, 2);
+    const truncated = serialized.length > EVIDENCE_RECORD_MAX_CHARS;
+    return {
+      ok: true,
+      evidenceId,
+      text: truncated
+        ? `${serialized.slice(0, EVIDENCE_RECORD_MAX_CHARS)}\n… [display truncated: ${EVIDENCE_RECORD_MAX_CHARS} of ${serialized.length} characters]`
+        : serialized,
+      truncated,
+      // The record embeds provider output derived from the target itself.
+      untrusted: true,
+    };
+  }
+
+  private async handleEvidenceExport(params: Record<string, unknown>): Promise<unknown> {
+    const overwrite = params["overwrite"];
+    if (overwrite !== undefined && typeof overwrite !== "boolean") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"overwrite" must be a boolean when provided.');
+    }
+    const rawName = params["name"];
+    if (rawName !== undefined && typeof rawName !== "string") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must be a string when provided.');
+    }
+    const stem = (rawName ?? `evidence-bundle-${new Date().toISOString().replace(/[:.]/g, "-")}`)
+      .replace(/\.json$/i, "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(stem) || stem.includes("..")) {
+      throw new JsonRpcException(
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        '"name" must be 1-80 characters of letters, digits, dot, dash, or underscore.',
+      );
+    }
+
+    const { connection, catalog } = await this.ensureConnected();
+    this.requireEvidenceTool(catalog, "export_evidence_bundle");
+
+    // The renderer never chooses a directory: exports stay inside the workspace
+    // so a compromised page cannot write anywhere the user did not expect.
+    const directory = resolve(this.config.workspaceDir, "evidence");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const path = join(directory, `${stem}.json`);
+
+    const raw = await connection.callTool("export_evidence_bundle", {
+      path,
+      ...(overwrite === true ? { overwrite: true } : {}),
+    });
+    const exported = readExportedBundle(raw);
+    const projected = projectToolResult(raw, { maxChars: 2_000 });
+    if (raw.isError === true || exported === undefined) {
+      return { ok: false, error: projected.text, path };
+    }
+    return { ok: true, ...exported };
   }
 
   private async handleTargetSession(): Promise<unknown> {

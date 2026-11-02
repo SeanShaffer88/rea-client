@@ -9,7 +9,7 @@ import type { ReaClientConfig } from "../config.js";
 import type { EngineBridge } from "./EngineBridge.js";
 import type { Bootstrap, DesktopEvent } from "./protocol.js";
 
-const RPC_METHODS = new Set(["engine.ping", "engine.doctor", "tools.list", "tools.describe", "target.session", "target.open", "target.close", "target.probe", "agent.ask", "agent.cancel", "agent.reset", "agent.transcript"]);
+const RPC_METHODS = new Set(["engine.ping", "engine.doctor", "tools.list", "tools.describe", "target.session", "target.open", "target.close", "target.probe", "evidence.list", "evidence.get", "evidence.export", "agent.ask", "agent.cancel", "agent.reset", "agent.transcript"]);
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon" };
 const MAX_BODY = 1024 * 1024;
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -145,6 +145,14 @@ export class DesktopGateway {
         const params = (value.params ?? {}) as Record<string, unknown>;
         if (value.method === "agent.ask" && (typeof params.question !== "string" || params.question.length > 32_000 || (params.extraInstructions !== undefined && (typeof params.extraInstructions !== "string" || params.extraInstructions.length > 8000)) || (params.clientRequestId !== undefined && (typeof params.clientRequestId !== "string" || params.clientRequestId.length === 0 || params.clientRequestId.length > 128)))) {
           this.json(response, 400, { error: "Question, request id, or instructions exceed the desktop input limit." }); return;
+        }
+        // Oversized or malformed evidence exports would only be rejected by the
+        // engine after a round trip; refuse them at the edge instead.
+        if (value.method === "evidence.export" && params.name !== undefined && (typeof params.name !== "string" || params.name.length > 96)) {
+          this.json(response, 400, { error: "The export name must be a short string." }); return;
+        }
+        if (value.method === "evidence.get" && (typeof params.evidenceId !== "string" || params.evidenceId.length > 128)) {
+          this.json(response, 400, { error: "An evidence id is required." }); return;
         }
         try {
           const result = await this.options.bridge.request(value.method, params, value.method === "agent.ask" ? 0 : 600_000);
