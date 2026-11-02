@@ -68,6 +68,11 @@ does not touch a binary or a model.
 
 ## What the UI covers
 
+- **Drag and drop** — drop a single file on the window. In Electron the preload
+  resolves the real path (`webUtils.getPathForFile`) and REA opens it in place
+  with no copy; in the browser preview the file is uploaded to the local
+  workspace. Empty, multi-file, oversized, and unresolved-path drops are
+  rejected with a specific reason instead of silently doing nothing.
 - **Workspace** — open a target by path or (browser) upload, read the format,
   architecture, SHA-256 and provider summary, start a conversation, watch tool
   calls stream in, stop a turn, switch scope, close the target. Reloading the
@@ -76,8 +81,13 @@ does not touch a binary or a model.
 - **Tool catalog** — the live 229-tool inventory with family filters, scope
   indicators, and lazily loaded JSON schemas (`tools.describe`). A tool can
   prefill a question; it cannot be invoked directly from the catalog.
-- **Evidence** — projected observations, evidence IDs, truncation and error
-  states, plus a local JSON report export.
+- **Evidence** — projected observations and evidence IDs, each attributed to
+  the target that was open when that tool ran (not whichever target happens to
+  be open now), truncation and error states, and a local export in two formats:
+  a human-readable Markdown report and a versioned JSON document
+  (`schemaVersion: 1`) containing the same turns, observations, and diagnostics.
+  Observation previews are fenced with a backtick run longer than anything they
+  contain, so untrusted target text cannot break out of its block.
 - **Diagnostics** — `engine.doctor` verdicts with remediation, reconnection, and
   a live engine event log.
 - **Settings** — read-only model/network/scope configuration, workspace
@@ -91,6 +101,10 @@ does not touch a binary or a model.
   previews can additionally require `REA_PREVIEW_TOKEN`.
 - **RPC allowlist.** The gateway exposes a fixed set of bridge methods. Engine
   shutdown, arbitrary methods, and raw tool execution are not reachable.
+- **Reports are local files.** Both export formats are assembled in the page
+  from state already in memory; nothing is uploaded, and no report is written
+  into the workspace unless you save it. A report contains target paths and
+  untrusted observation text, so treat exported files as sensitive.
 - **No renderer privileges.** Electron uses `contextIsolation`, `sandbox`,
   `nodeIntegration: false`, denies window creation, navigation, webviews, and
   all permission requests. The preload exposes exactly one method
@@ -104,6 +118,17 @@ does not touch a binary or a model.
   remote images, or external navigation.
 - **Loopback by default.** `0.0.0.0` binding requires an explicit `--preview`.
   The browser preview is a development/review surface, not a public service.
+
+## Accessibility
+
+- Dialogs are native `<dialog>` elements with `aria-modal`, labelled headings,
+  explicit initial focus, and a Tab cycle (the fallback path for environments
+  without `showModal` gets the same behaviour). Focus returns to the control
+  that opened the dialog.
+- The transcript is an `aria-live="polite"` region with `aria-busy` while a turn
+  is running, so streaming answers are announced rather than silently changing.
+- Icon-only controls carry `aria-label`s, tabs expose `aria-selected`, and all
+  animation respects `prefers-reduced-motion`.
 
 ## Event correlation
 
@@ -148,6 +173,12 @@ real ELF target (`/usr/bin/ls`):
   Markdown, the turn footer reported "Investigation complete · 2 steps",
   evidence gained that observation, and Diagnostics flipped the model check to
   Passed — with no console or page errors.
+- Drag-and-drop, report export, and the upload path were re-checked against the
+  running gateway: a real `POST /api/upload` of `/usr/bin/ls` returned a
+  workspace path that `target.probe` then opened (`elf`, `x86_64`), the drop
+  overlay renders and cancels the browser's default, and both export buttons
+  produced `rea-analysis-YYYY-MM-DD.md` / `.json` containing the turn, the
+  evidence ID, and `schemaVersion: 1`.
 - `npm run typecheck`, `npm run typecheck:desktop`, all unit tests, and the
   coverage gate pass.
 
@@ -160,7 +191,9 @@ Automated coverage for the desktop tier:
 | Electron trust rules | `test/unit/desktopSecurity.test.ts` — navigation/IPC origins and locked-down `webPreferences` |
 | Streaming UI state | `test/unit/desktopState.test.ts` — deltas, tool activity, completion, interruption |
 | API client | `test/unit/uiApi.test.ts` — 401 re-bootstrap, upload contract, error surfacing |
-| Rendered App | `test/unit/uiApp.test.tsx` (jsdom) — boot, catalog, diagnostics, target open, overview failure, retry |
+| Rendered App | `test/unit/uiApp.test.tsx` (jsdom) — boot, catalog, diagnostics, target open, overview failure, retry, transcript restore, report export, drop overlay |
+| Report export | `test/unit/report.test.ts` — turn pairing, per-target attribution, Markdown fencing, file names |
+| Drop routing | `test/unit/drop.test.ts` — open-in-place vs upload vs reject |
 
 Not verified here, and not claimed:
 
@@ -169,6 +202,10 @@ Not verified here, and not claimed:
   system GTK/NSS libraries. The main/preload code is typechecked and compiled to
   ESM/CommonJS respectively, but native runtime behaviour needs a desktop
   machine.
+- **Browser uploads were not exercised from a real browser engine.** The
+  endpoint was validated with real HTTP requests, and the client explicitly
+  turns an aborted/incompatible upload into "open it by path instead" rather
+  than a raw stream error.
 - **No screenshot-based visual regression.** CSS is reviewed for layout and
   responsive breakpoints, but no rendering engine with layout was available.
 - **No live model turn.** There is no `llama-server` in the sandbox, so the

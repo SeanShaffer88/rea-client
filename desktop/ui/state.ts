@@ -15,10 +15,12 @@ export interface Message {
   error?: string;
   iterations?: number;
   time: string;
+  /** Target that was open when the question was asked, so evidence stays attributed. */
+  targetPath?: string;
 }
 export interface ChatState { messages: Message[]; running: boolean; requestId: string | null }
 export type ChatAction =
-  | { type: "ask"; id: string; question: string; time: string }
+  | { type: "ask"; id: string; question: string; time: string; targetPath?: string }
   | { type: "event"; event: DesktopEvent }
   | { type: "complete"; id: string; content: string; reason: AgentDoneReason; error?: string; iterations: number }
   | { type: "fail"; id: string; error: string }
@@ -61,8 +63,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   if (action.type === "ask") return {
     running: true, requestId: action.id,
     messages: [...state.messages,
-      { id: action.id, role: "user", content: action.question, activities: [], time: action.time },
-      { id: `${action.id}:answer`, role: "assistant", content: "", streaming: true, activities: [], time: action.time },
+      { id: action.id, role: "user", content: action.question, activities: [], time: action.time, ...(action.targetPath === undefined ? {} : { targetPath: action.targetPath }) },
+      { id: `${action.id}:answer`, role: "assistant", content: "", streaming: true, activities: [], time: action.time, ...(action.targetPath === undefined ? {} : { targetPath: action.targetPath }) },
     ],
   };
   if (action.type === "interrupt") {
