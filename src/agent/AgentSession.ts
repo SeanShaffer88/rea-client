@@ -42,6 +42,11 @@ import {
   type ArgumentGuardLimits,
 } from "./argumentGuard.js";
 
+export type ExtraToolHandler = (
+  args: Record<string, unknown>,
+  options: { readonly signal?: AbortSignal },
+) => Promise<ToolObservation | string> | ToolObservation | string;
+
 export interface AgentSessionOptions {
   readonly connection: McpConnection;
   readonly chat: ChatTransport;
@@ -58,11 +63,19 @@ export interface AgentSessionOptions {
   readonly toolTimeoutMs?: number;
   /** Extra function definitions beyond the REA catalog (local utilities). */
   readonly extraTools?: readonly FunctionDefinition[];
+  /** Local handlers corresponding to `extraTools` by function name. */
+  readonly extraToolHandlers?: Readonly<Record<string, ExtraToolHandler>>;
   /**
    * Bounds on outbound tool arguments. Defaults are conservative; see
    * `argumentGuard.ts` for why they exist.
    */
   readonly argumentLimits?: ArgumentGuardLimits;
+  /**
+   * Allow dispatching catalog tools outside the resolved `scope`. Defaults to
+   * `false` so prompt-injected target content cannot invoke unadvertised
+   * dynamic-execution or disk-write tools.
+   */
+  readonly allowUnscopedTools?: boolean;
 }
 
 export interface AskOptions {
@@ -75,6 +88,7 @@ export interface AgentResult {
   readonly iterations: number;
   readonly toolCallsExecuted: number;
   readonly usage: TokenUsage | undefined;
+  readonly error?: string | undefined;
 }
 
 const APPROX_CHARS_PER_TOKEN = 3.5;
@@ -84,12 +98,19 @@ export class AgentSession extends Emitter<AgentEvents> {
   private readonly options: AgentSessionOptions;
   private readonly messages: ChatMessage[] = [];
   private readonly mapped: MappedToolSet;
+  private readonly scopedMcpNames: ReadonlySet<string>;
+  private readonly extraToolsChars: number;
   private running = false;
 
   public constructor(options: AgentSessionOptions) {
     super();
     this.options = options;
     this.mapped = buildFunctionDefinitions(options.scope.tools);
+    this.scopedMcpNames = new Set(options.scope.tools.map((tool) => tool.name));
+    this.extraToolsChars = (options.extraTools ?? []).reduce(
+      (sum, def) => sum + JSON.stringify(def).length,
+      0,
+    );
     this.messages.push({ role: "system", content: options.systemPrompt });
   }
 
@@ -99,7 +120,7 @@ export class AgentSession extends Emitter<AgentEvents> {
   }
 
   public get advertisedToolCount(): number {
-    return this.mapped.definitions.length;
+    return this.mapped.definitions.length + (this.options.extraTools?.length ?? 0);
   }
 
   /** Copy of the live transcript, for rendering or persistence. */
@@ -118,16 +139,18 @@ export class AgentSession extends Emitter<AgentEvents> {
     return Math.ceil(this.serializedChars() / APPROX_CHARS_PER_TOKEN);
   }
 
-  private serializedChars(): number {
-    let total = 0;
-    for (const message of this.messages) {
-      total += (message.content ?? "").length;
-      for (const call of message.tool_calls ?? []) {
-        total += call.function.name.length + call.function.arguments.length;
-      }
+  private static messageChars(message: ChatMessage): number {
+    let total = (message.content ?? "").length;
+    for (const call of message.tool_calls ?? []) {
+      total += call.function.name.length + call.function.arguments.length;
     }
-    for (const definition of this.mapped.definitions) {
-      total += JSON.stringify(definition).length;
+    return total;
+  }
+
+  private serializedChars(): number {
+    let total = this.mapped.approximateChars + this.extraToolsChars;
+    for (const message of this.messages) {
+      total += AgentSession.messageChars(message);
     }
     return total;
   }
@@ -227,7 +250,7 @@ export class AgentSession extends Emitter<AgentEvents> {
       }
       this.emit("error", { message, recoverable: false });
       this.emit("done", { reason: "failed", iterations });
-      return { content, reason: "failed", iterations, toolCallsExecuted, usage };
+      return { content, reason: "failed", iterations, toolCallsExecuted, usage, error: message };
     } finally {
       this.running = false;
     }
@@ -270,6 +293,60 @@ export class AgentSession extends Emitter<AgentEvents> {
       return ToolObservation.fromError(parsed.message);
     }
 
+    // Bound the payload before it reaches any handler or server validator. A
+    // hostile target can steer the model into emitting a huge array; this is
+    // where that stops.
+    const guard = checkToolArguments(
+      parsed.value,
+      this.options.argumentLimits ?? DEFAULT_GUARD_LIMITS,
+    );
+    if (!guard.ok) {
+      this.emit("tool_call_finished", {
+        id: call.id,
+        name: functionName,
+        mcpName,
+        ok: false,
+        elapsedMs: 0,
+        truncated: false,
+        evidenceId: undefined,
+        preview: guard.message,
+      });
+      return ToolObservation.fromError(guard.message);
+    }
+
+    const extraHandler = this.options.extraToolHandlers?.[functionName];
+    if (extraHandler !== undefined) {
+      this.emit("tool_call_started", {
+        id: call.id,
+        name: functionName,
+        mcpName: functionName,
+        arguments: parsed.value,
+        iteration,
+      });
+      const startedAt = performance.now();
+      let observation: ToolObservation;
+      try {
+        const out = await extraHandler(parsed.value, {
+          ...(askOptions.signal === undefined ? {} : { signal: askOptions.signal }),
+        });
+        observation = typeof out === "string" ? ToolObservation.fromText(out) : out;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        observation = ToolObservation.fromError(message);
+      }
+      this.emit("tool_call_finished", {
+        id: call.id,
+        name: functionName,
+        mcpName: functionName,
+        ok: !observation.text.startsWith(ToolObservation.errorPrefix),
+        elapsedMs: Math.round(performance.now() - startedAt),
+        truncated: observation.truncated,
+        evidenceId: observation.evidenceId,
+        preview: previewOf(observation.text),
+      });
+      return observation;
+    }
+
     if (!this.options.catalog.has(mcpName)) {
       const suggestion = this.closestNames(functionName);
       const message =
@@ -288,14 +365,12 @@ export class AgentSession extends Emitter<AgentEvents> {
       return ToolObservation.fromError(message);
     }
 
-    // Bound the payload before it reaches the server's validator. A hostile
-    // target can steer the model into emitting a huge array; this is where that
-    // stops.
-    const guard = checkToolArguments(
-      parsed.value,
-      this.options.argumentLimits ?? DEFAULT_GUARD_LIMITS,
-    );
-    if (!guard.ok) {
+    if (this.options.allowUnscopedTools !== true && !this.scopedMcpNames.has(mcpName)) {
+      const suggestion = this.closestNames(functionName);
+      const message =
+        `Tool "${functionName}" is outside the active "${this.options.scope.scope}" tool scope ` +
+        `and cannot be invoked in this session. Call one of the advertised tools instead` +
+        `${suggestion.length > 0 ? ` (e.g. ${suggestion.join(", ")})` : ""}.`;
       this.emit("tool_call_finished", {
         id: call.id,
         name: functionName,
@@ -304,9 +379,9 @@ export class AgentSession extends Emitter<AgentEvents> {
         elapsedMs: 0,
         truncated: false,
         evidenceId: undefined,
-        preview: guard.message,
+        preview: message,
       });
-      return ToolObservation.fromError(guard.message);
+      return ToolObservation.fromError(message);
     }
 
     this.emit("tool_call_started", {
@@ -370,26 +445,38 @@ export class AgentSession extends Emitter<AgentEvents> {
    * conversation with no question in it.
    */
   private pruneIfNeeded(): void {
-    const budgetChars = this.options.contextWindow * APPROX_CHARS_PER_TOKEN;
-    if (this.serializedChars() <= budgetChars) return;
+    const reservedCompletionTokens = Math.min(
+      this.options.maxTokens,
+      Math.floor(this.options.contextWindow * 0.25),
+    );
+    const budgetChars =
+      Math.max(256, this.options.contextWindow - reservedCompletionTokens) *
+      APPROX_CHARS_PER_TOKEN;
+
+    let currentChars = this.serializedChars();
+    if (currentChars <= budgetChars) return;
 
     const units = groupIntoUnits(this.messages);
     let dropped = 0;
 
     // Keep units[0] if it is the system message; always keep the last unit.
-    const startIndex = this.messages[0]?.role === "system" ? 1 : 0;
-    while (units.length > 1 && this.serializedChars() > budgetChars) {
-      if (units.length <= (startIndex === 1 ? 2 : 1)) break;
+    const hasLeadingSystem = this.messages[0]?.role === "system";
+    const startIndex = hasLeadingSystem ? 1 : 0;
+    const minUnits = hasLeadingSystem ? 2 : 1;
+
+    while (units.length > minUnits && currentChars > budgetChars) {
       const removed = units[startIndex];
       if (removed === undefined) break;
       units.splice(startIndex, 1);
       dropped += removed.length;
+      for (const message of removed) {
+        currentChars -= AgentSession.messageChars(message);
+      }
     }
 
     if (dropped > 0) {
-      const system = this.messages[0]?.role === "system" ? [this.messages[0]] : [];
       this.messages.length = 0;
-      this.messages.push(...system, ...units.flat());
+      this.messages.push(...units.flat());
       this.emit("context_pruned", {
         droppedMessages: dropped,
         estimatedTokens: this.estimatedTranscriptTokens(),
@@ -489,6 +576,7 @@ export function createAgentSession(
       maxArrayItems: config.agent.maxArgumentArrayItems,
       maxBytes: config.agent.maxArgumentBytes,
     },
+    allowUnscopedTools: config.agent.allowUnscopedTools,
     temperature: config.llm.temperature,
     maxTokens: config.llm.maxTokens,
     contextWindow: config.llm.contextWindow,

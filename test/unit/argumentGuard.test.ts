@@ -56,10 +56,20 @@ describe("checkToolArguments", () => {
     expect(checkToolArguments({ pseudocode: "a".repeat(150) }, limits).ok).toBe(true);
   });
 
-  it("is not defeated by deep nesting", () => {
-    let nested: Record<string, unknown> = { leaf: true };
-    for (let index = 0; index < 200; index += 1) nested = { next: nested };
-    expect(() => checkToolArguments(nested, limits)).not.toThrow();
+  it("fails closed when nesting exceeds MAX_ARGUMENT_DEPTH", () => {
+    let nested: Record<string, unknown> = { hidden: [1, 2, 3, 4, 5] };
+    for (let index = 0; index < 20; index += 1) nested = { next: nested };
+    const result = checkToolArguments(nested, { maxArrayItems: 3, maxBytes: 10_000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("depth_exceeded");
+  });
+
+  it("counts UTF-8 bytes rather than UTF-16 code units", () => {
+    // 60 four-byte emoji = 120 UTF-16 code units (< 200), but > 240 UTF-8 bytes (> 200).
+    const emojiPayload = { note: "🔥".repeat(60) };
+    const result = checkToolArguments(emojiPayload, { maxArrayItems: 10, maxBytes: 200 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("payload_too_large");
   });
 
   it("uses conservative defaults when no limits are given", () => {

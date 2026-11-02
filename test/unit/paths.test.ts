@@ -57,8 +57,44 @@ describe("canonicalizeTargetPath (windows)", () => {
     }
   });
 
-  it("rejects drive-relative paths, which Win32 resolves against a per-drive cwd", () => {
+  it("rejects drive-relative paths, even when resolveRelativeTo is supplied", () => {
     expect(() => canonicalizeTargetPath("C:app.exe", win)).toThrow(TargetPathError);
+    expect(() =>
+      canonicalizeTargetPath("C:app.exe", { ...win, resolveRelativeTo: "C:\\work" }),
+    ).toThrow(TargetPathError);
+  });
+
+  it("rejects drive-less root-relative paths and bare UNC server names", () => {
+    expect(() => canonicalizeTargetPath("\\targets\\app.exe", win)).toThrow(TargetPathError);
+    expect(() => canonicalizeTargetPath("file:///targets/app.exe", win)).toThrow(TargetPathError);
+    expect(() => canonicalizeTargetPath("\\\\server", win)).toThrow(TargetPathError);
+    expect(() => canonicalizeTargetPath("\\\\server\\", win)).toThrow(TargetPathError);
+  });
+
+  it("blocks non-loopback UNC shares when allowNonLoopback is false", () => {
+    try {
+      canonicalizeTargetPath("\\\\10.0.0.5\\share\\app.exe", {
+        ...win,
+        allowNonLoopback: false,
+      });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect((error as TargetPathError).code).toBe("non_local_unc");
+    }
+
+    expect(
+      canonicalizeTargetPath("\\\\127.0.0.1\\share\\app.exe", {
+        ...win,
+        allowNonLoopback: false,
+      }),
+    ).toBe("\\\\127.0.0.1\\share\\app.exe");
+
+    expect(
+      canonicalizeTargetPath("\\\\10.0.0.5\\share\\app.exe", {
+        ...win,
+        allowNonLoopback: true,
+      }),
+    ).toBe("\\\\10.0.0.5\\share\\app.exe");
   });
 
   it("resolves relative input when a base is supplied", () => {
@@ -121,7 +157,11 @@ describe("identity helpers", () => {
     expect(targetCacheKey("C:/Targets/APP.EXE")).toBe(targetCacheKey("C:\\targets\\app.exe"));
   });
 
-  it("round-trips through a file URL", () => {
+  it("round-trips through a file URL and percent-encodes reserved characters", () => {
     expect(toFileUrl("C:\\targets\\app.exe")).toBe("file:///C:/targets/app.exe");
+    const tricky = "C:\\re#1\\100% legit?.exe";
+    const encoded = toFileUrl(tricky);
+    expect(encoded).toBe("file:///C:/re%231/100%25%20legit%3F.exe");
+    expect(canonicalizeTargetPath(encoded, win)).toBe(tricky);
   });
 });

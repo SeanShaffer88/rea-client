@@ -179,6 +179,22 @@ describe("installedCopies", () => {
     expect(copies).toHaveLength(1);
   });
 
+  it("attributes hoisted and root dependencies using upward node_modules resolution", async () => {
+    await lockfile({
+      "": { devDependencies: { zod: "^4.6.7" } },
+      "node_modules/@modelcontextprotocol/core": {
+        name: "@modelcontextprotocol/core",
+        version: "2.4.0",
+        dependencies: { zod: "^4.0.0" },
+      },
+      "node_modules/zod": { version: "4.6.7" },
+    });
+
+    const copies = await installedCopies("zod", root);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]?.requiredBy).toEqual(["(root)", "@modelcontextprotocol/core"]);
+  });
+
   it("rejects a corrupt lockfile", async () => {
     await writeFile(join(root, "package-lock.json"), "{not json", "utf8");
     await expect(installedCopies("zod", root)).rejects.toThrow(AdvisoryError);
@@ -455,7 +471,7 @@ describe("assessDependency gating", () => {
     expect(report.ok).toBe(false);
   });
 
-  it("flags an acceptance whose review date has passed", async () => {
+  it("flags an acceptance whose review date has passed and fails report.ok", async () => {
     const report = await assessDependency({
       projectRoot: root,
       packageName: "zod",
@@ -474,6 +490,8 @@ describe("assessDependency gating", () => {
     });
     expect(report.overdueReviews).toHaveLength(1);
     expect(report.overdueReviews?.[0]).toContain("review by 2020-06-01");
+    expect(report.blocking).toHaveLength(1);
+    expect(report.ok).toBe(false);
   });
 });
 

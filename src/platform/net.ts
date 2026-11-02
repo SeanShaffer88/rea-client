@@ -33,13 +33,22 @@ export function isLoopbackHostname(hostname: string): boolean {
   const family = isIP(host);
   if (family === 4) return host.startsWith("127.");
   if (family === 6) {
-    if (host === "::1") return true;
-    // IPv4-mapped loopback: ::ffff:127.0.0.1
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
-    if (mapped?.[1] !== undefined) return mapped[1].startsWith("127.");
+    const canonical = canonicalizeIpv6(host);
+    if (canonical === "::1") return true;
+    // WHATWG URL canonicalizes ::ffff:127.a.b.c into ::ffff:7fXX:YYYY.
+    if (/^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/i.test(canonical)) return true;
     return false;
   }
   return false;
+}
+
+/** Canonicalizes any valid IPv6 literal via the WHATWG URL parser. */
+function canonicalizeIpv6(ipv6: string): string {
+  try {
+    return new URL(`http://[${ipv6}]`).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return ipv6.toLowerCase();
+  }
 }
 
 export interface UrlPolicyOptions {

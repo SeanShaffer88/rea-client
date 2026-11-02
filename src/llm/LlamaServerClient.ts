@@ -46,10 +46,17 @@ interface RawToolCallDelta {
   function?: { name?: string; arguments?: string };
 }
 
+interface RawMessageToolCall {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
 interface RawStreamChunk {
   choices?: Array<{
     index?: number;
     delta?: { content?: string | null; tool_calls?: RawToolCallDelta[] };
+    message?: { content?: string | null; tool_calls?: RawMessageToolCall[] };
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -103,49 +110,85 @@ export class LlamaServerClient implements ChatTransport {
       headers["authorization"] = `Bearer ${this.options.apiKey}`;
     }
 
+    const timeoutMs = this.options.requestTimeoutMs;
+    const idleController = new AbortController();
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearIdleTimer = (): void => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+    };
+
+    const resetIdleTimer = (): void => {
+      if (timeoutMs === undefined) return;
+      clearIdleTimer();
+      idleTimer = setTimeout(() => {
+        idleController.abort(
+          new LlmRequestError(
+            `Model server at ${this.endpoint} timed out after ${String(timeoutMs)}ms without activity.`,
+          ),
+        );
+      }, timeoutMs);
+    };
+
     const signals: AbortSignal[] = [];
     if (options.signal !== undefined) signals.push(options.signal);
-    const timeoutMs = this.options.requestTimeoutMs;
-    if (timeoutMs !== undefined) signals.push(AbortSignal.timeout(timeoutMs));
+    if (timeoutMs !== undefined) signals.push(idleController.signal);
 
     const fetchImpl = this.options.fetchImpl ?? fetch;
-    let response: Response;
+    resetIdleTimer();
     try {
-      response = await fetchImpl(this.endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        ...(signals.length === 0 ? {} : { signal: AbortSignal.any(signals) }),
-      });
-    } catch (error) {
-      throw new LlmRequestError(
-        `Could not reach the local model server at ${this.endpoint}: ${(error as Error).message}`,
+      let response: Response;
+      try {
+        response = await fetchImpl(this.endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          ...(signals.length === 0 ? {} : { signal: AbortSignal.any(signals) }),
+        });
+      } catch (error) {
+        if (error instanceof LlmRequestError) throw error;
+        throw new LlmRequestError(
+          `Could not reach the local model server at ${this.endpoint}: ${(error as Error).message}`,
+        );
+      }
+
+      resetIdleTimer();
+
+      if (!response.ok) {
+        const text = await safeText(response);
+        throw new LlmRequestError(
+          `Model server returned HTTP ${response.status} for ${this.endpoint}.`,
+          response.status,
+          text,
+        );
+      }
+
+      if (response.body === null) {
+        throw new LlmRequestError("Model server returned an empty response body.");
+      }
+
+      yield* this.parseEventStream(
+        response.body,
+        response.headers.get("content-type"),
+        resetIdleTimer,
       );
+    } finally {
+      clearIdleTimer();
     }
-
-    if (!response.ok) {
-      const text = await safeText(response);
-      throw new LlmRequestError(
-        `Model server returned HTTP ${response.status} for ${this.endpoint}.`,
-        response.status,
-        text,
-      );
-    }
-
-    if (response.body === null) {
-      throw new LlmRequestError("Model server returned an empty response body.");
-    }
-
-    yield* this.parseEventStream(response.body, response.headers.get("content-type"));
   }
 
   private async *parseEventStream(
     stream: ReadableStream<Uint8Array>,
     contentType: string | null,
+    onActivity?: () => void,
   ): AsyncGenerator<StreamEvent, void, undefined> {
     // Some servers ignore `stream: true` and answer with a single JSON object.
     if (contentType !== null && contentType.includes("application/json")) {
       const text = await new Response(stream).text();
+      onActivity?.();
       yield* this.parseWholeJson(text);
       return;
     }
@@ -157,7 +200,11 @@ export class LlamaServerClient implements ChatTransport {
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          buffer += decoder.decode();
+          break;
+        }
+        onActivity?.();
         buffer += decoder.decode(value, { stream: true });
 
         // SSE events are separated by a blank line; "\r\n\r\n" is also valid.
@@ -250,14 +297,16 @@ export class LlamaServerClient implements ChatTransport {
       throw new LlmRequestError(`Model server error: ${parsed.error.message ?? "unknown error"}`);
     }
     const choice = parsed.choices?.[0];
-    const content = choice?.delta?.content ?? undefined;
+    const content = choice?.message?.content ?? choice?.delta?.content ?? undefined;
     if (typeof content === "string" && content !== "") {
       yield { type: "text_delta", text: content };
     }
-    for (const [index, call] of (choice?.delta?.tool_calls ?? []).entries()) {
+    const rawToolCalls = choice?.message?.tool_calls ?? choice?.delta?.tool_calls ?? [];
+    for (const [index, call] of rawToolCalls.entries()) {
+      const callIndex = "index" in call && typeof call.index === "number" ? call.index : index;
       yield {
         type: "tool_call_delta",
-        index: call.index ?? index,
+        index: callIndex,
         ...(call.id === undefined ? {} : { id: call.id }),
         ...(call.function?.name === undefined ? {} : { name: call.function.name }),
         ...(call.function?.arguments === undefined ? {} : { argumentsDelta: call.function.arguments }),

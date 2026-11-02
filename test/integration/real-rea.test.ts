@@ -10,7 +10,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, type ReaServerConfig } from "../../src/config.js";
 import { ToolCatalog } from "../../src/mcp/catalog.js";
@@ -34,8 +34,20 @@ if (!hasRea && process.env["CI"] === "true") {
   );
 }
 
-/** A real ELF binary that exists on every Linux CI image. */
-const SYSTEM_BINARY = "/usr/bin/ls";
+/** A real native binary that exists on every Linux, macOS, and Windows CI image. */
+const SYSTEM_BINARY =
+  process.platform === "win32"
+    ? join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "whoami.exe")
+    : process.platform === "darwin"
+      ? "/bin/ls"
+      : "/usr/bin/ls";
+
+const EXPECTED_FORMAT =
+  process.platform === "win32"
+    ? "pe"
+    : process.platform === "darwin"
+      ? "macho"
+      : "elf";
 
 describe.skipIf(!hasRea)("real rea-agents MCP server", () => {
   let client: ReaClient;
@@ -140,7 +152,7 @@ describe.skipIf(!hasRea)("real rea-agents MCP server", () => {
     });
 
     it("renders a missing-file failure without throwing", async () => {
-      const result = await client.callTool("open_binary", { path: "/nonexistent/gone.exe" });
+      const result = await client.callTool("open_binary", { path: resolve("/nonexistent/gone.exe") });
       const observation = projectToolResult(result, { maxChars: 2_000 });
       expect(observation.text).toContain("TOOL_ERROR");
       expect(observation.text.length).toBeLessThanOrEqual(2_000);
@@ -148,17 +160,17 @@ describe.skipIf(!hasRea)("real rea-agents MCP server", () => {
   });
 
   describe("opening a real target", () => {
-    it("opens an ELF binary and reports identity", async () => {
+    it("opens a native binary and reports identity", async () => {
       const result = await client.callTool("open_binary", { path: SYSTEM_BINARY });
       expect(result.isError).toBeFalsy();
 
       const observation = projectToolResult(result, { maxChars: 4_000 });
-      expect(observation.text).toContain("elf");
+      expect(observation.text.toLowerCase()).toContain(EXPECTED_FORMAT);
 
       const session = readBinarySession(await client.callTool("binary_session", {}));
       expect(session?.open).toBe(true);
-      expect(session?.format).toBe("elf");
-      expect(session?.architecture).toBe("x86_64");
+      expect(session?.format).toBe(EXPECTED_FORMAT);
+      expect(session?.architecture).toMatch(/^(x86_64|aarch64|arm64)$/i);
       expect(session?.sha256).toMatch(/^[a-f0-9]{64}$/);
       // The server canonicalizes through symlinks; the reported path is
       // authoritative rather than the caller's spelling.

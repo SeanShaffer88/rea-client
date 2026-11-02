@@ -146,7 +146,7 @@ async function configWithoutRea(): Promise<string> {
   await writeFile(
     path,
     JSON.stringify({
-      rea: { command: process.execPath, args: ["-e", "process.exit(1)"], startupTimeoutMs: 5000 },
+      rea: { command: process.execPath, args: ["-e", "process.exit(1)"], startupTimeoutSec: 5 },
     }),
     "utf8",
   );
@@ -226,7 +226,7 @@ describe.runIf(HAS_DIST)("vendor advisories", () => {
     const file = join(projectRoot, "service.json");
     await writeFile(
       file,
-      JSON.stringify({ rea: { command: process.execPath, args: ["-e", "process.exit(1)"], startupTimeoutMs: 5000 } }),
+      JSON.stringify({ rea: { command: process.execPath, args: ["-e", "process.exit(1)"], startupTimeoutSec: 5 } }),
       "utf8",
     );
     const result = await runCli(
@@ -384,5 +384,45 @@ describe.runIf(HAS_DIST)("vendor advisories", () => {
     );
 
     expect(result.code).toBe(1);
+  });
+
+  it("blocks when an accepted finding's reviewBy date has expired", async () => {
+    const expiredPath = join(projectRoot, "accept-expired.json");
+    await writeFile(
+      expiredPath,
+      JSON.stringify({
+        accepted: [
+          {
+            id: "GHSA-mrhx-c7xc-m3w5",
+            package: "zod",
+            rationale: "temporary waiver",
+            mitigation: "argument guard",
+            reviewedAt: "2025-01-01",
+            reviewBy: "2025-06-01",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const result = await runCli(
+      [
+        "vendor",
+        "advisories",
+        "zod",
+        "--advisories",
+        await offlineAdvisoryFile(),
+        "--config",
+        await configWithoutRea(),
+        "--accept",
+        expiredPath,
+      ],
+      projectRoot,
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("EXPIRED");
+    expect(result.stdout).toContain("FAIL");
+    expect(result.stderr).toContain("expired and requires re-review");
   });
 });

@@ -179,10 +179,15 @@ export function manifestFilesFromTarball(entries: readonly TarEntry[]): Manifest
 export async function compareDirectoryToTarball(
   directory: string,
   tarball: TarballData,
-  meta: { readonly fileCount?: number; readonly unpackedSize?: number } = {},
+  meta: {
+    readonly fileCount?: number;
+    readonly unpackedSize?: number;
+    readonly actualManifest?: VendorManifest;
+  } = {},
 ): Promise<TarballComparison> {
   const expected = manifestFilesFromTarball(tarball.entries);
-  const actual = await buildManifest(directory, { package: "compare", version: "0" });
+  const actual =
+    meta.actualManifest ?? (await buildManifest(directory, { package: "compare", version: "0" }));
 
   const expectedByPath = new Map(expected.map((file) => [file.path, file]));
   const actualByPath = new Map(actual.files.map((file) => [file.path, file]));
@@ -234,14 +239,15 @@ export async function buildAnchoredManifest(
   packument: Packument,
   tarball: TarballData,
 ): Promise<{ readonly manifest: VendorManifest; readonly comparison: TarballComparison }> {
-  const comparison = await compareDirectoryToTarball(directory, tarball, {
-    ...(packument.fileCount === undefined ? {} : { fileCount: packument.fileCount }),
-    ...(packument.unpackedSize === undefined ? {} : { unpackedSize: packument.unpackedSize }),
-  });
-
   const base = await buildManifest(directory, {
     package: packument.name,
     version: packument.version,
+  });
+
+  const comparison = await compareDirectoryToTarball(directory, tarball, {
+    ...(packument.fileCount === undefined ? {} : { fileCount: packument.fileCount }),
+    ...(packument.unpackedSize === undefined ? {} : { unpackedSize: packument.unpackedSize }),
+    actualManifest: base,
   });
 
   return {

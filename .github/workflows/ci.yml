@@ -16,9 +16,13 @@ concurrency:
 
 jobs:
   check:
-    name: typecheck + tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: typecheck + tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Check out
@@ -67,10 +71,7 @@ jobs:
       # green when the network does. `npm run advisories:refresh` updates the
       # recording; see docs/supply-chain.md for why this exists at all.
       - name: Assess dependency advisories
-        run: |
-          node dist/cli.js vendor advisories zod \
-            --advisories vendor/advisories/zod.ghsa.json \
-            --accept vendor/advisories/accepted.json
+        run: node dist/cli.js vendor advisories zod --advisories vendor/advisories/zod.ghsa.json --accept vendor/advisories/accepted.json
 
       # Both vitest projects: unit, plus integration against a real rea-agents
       # MCP server over stdio and a real HTTP model server.

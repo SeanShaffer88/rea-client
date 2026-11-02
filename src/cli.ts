@@ -14,16 +14,21 @@
  * stack can be validated independently of inference.
  */
 
-import { resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
-import { loadConfig, type ReaClientConfig } from "./config.js";
+import {
+  ConfigError,
+  loadConfig,
+  type ReaClientConfig,
+  type ToolScopeName,
+} from "./config.js";
 import { runDoctor } from "./doctor.js";
-import { AgentSession } from "./agent/AgentSession.js";
+import { createAgentSession } from "./agent/AgentSession.js";
 import { buildSystemPrompt } from "./agent/prompt.js";
 import { LlamaServerClient } from "./llm/LlamaServerClient.js";
 import { ToolCatalog } from "./mcp/catalog.js";
 import { ReaClient } from "./mcp/ReaClient.js";
-import { projectToolResult } from "./mcp/evidence.js";
+import { ToolObservation, projectToolResult } from "./mcp/evidence.js";
 import { readBinarySession } from "./mcp/session.js";
 import { canonicalizeTargetPath, TargetPathError } from "./platform/paths.js";
 import { ManifestError, parseManifest, serializeManifest, verifyManifest } from "./packaging/manifest.js";
@@ -41,7 +46,14 @@ import {
   readPackageIdentity,
 } from "./packaging/registry.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative } from "node:path";
+
+const CLI_VERSION = "0.1.0";
+const VALID_SCOPES: readonly ToolScopeName[] = [
+  "binary-core",
+  "binary-extended",
+  "full",
+  "custom",
+];
 
 const USAGE = `rea-client — headless driver for the REA desktop engine
 
@@ -49,8 +61,8 @@ Usage:
   rea-client doctor [--config <path>] [--json] [--no-llm]
   rea-client tools  [--config <path>] [--json] [--family <id>] [--scope <name>]
   rea-client probe <binary> [--config <path>] [--json]
-  rea-client ask "<question>" [--open <binary>] [--config <path>] [--json]
-  rea-client vendor manifest <dir> --out <file> [--registry <url>] [--json]
+  rea-client ask "<question>" [--open <binary>] [--scope <name>] [--config <path>] [--json]
+  rea-client vendor manifest <dir> [--out <file>] [--registry <url>] [--json]
   rea-client vendor verify <dir> --manifest <file> [--json]
   rea-client vendor advisories [<package>] [--deny <severity>] [--advisories <file>] [--json]
 
@@ -60,6 +72,7 @@ Options:
   --no-llm          doctor only: skip the model server probe
   --family <id>     tools only: restrict to one family
   --scope <name>    tools/ask: binary-core | binary-extended | full | custom
+  --open <path>     ask only: open target binary before starting the turn
   --out <path>      vendor manifest: where to write the manifest
   --manifest <path> vendor verify: manifest to verify against
   --registry <url>  vendor manifest: npm registry (default registry.npmjs.org)
@@ -68,33 +81,88 @@ Options:
   --accept <file>    vendor advisories: findings already reviewed and accepted
   --advisories <f>   vendor advisories: read advisory JSON offline instead of querying
                      (REA_ADVISORY_API overrides the advisory service URL)
+  --version, -v     print version
   --help, -h        show this help
 
 Exit codes:
   0 success   1 check failed   2 bad usage
 `;
 
+function validateScopeOption(
+  scopeOption: string | undefined,
+  config: ReaClientConfig,
+): { readonly ok: true; readonly scope: ToolScopeName } | { readonly ok: false; readonly message: string } {
+  if (scopeOption === undefined) {
+    return { ok: true, scope: config.agent.toolScope };
+  }
+  const match = VALID_SCOPES.find((candidate) => candidate === scopeOption);
+  if (match === undefined) {
+    return {
+      ok: false,
+      message: `--scope must be one of: ${VALID_SCOPES.join(", ")} (received ${JSON.stringify(scopeOption)})`,
+    };
+  }
+  if (match === "custom" && config.agent.customTools.length === 0) {
+    return {
+      ok: false,
+      message: '--scope custom requires at least one tool in config "agent.customTools".',
+    };
+  }
+  return { ok: true, scope: match };
+}
+
 async function main(argv: readonly string[]): Promise<number> {
-  const { values, positionals } = parseArgs({
-    args: [...argv],
-    allowPositionals: true,
-    options: {
-      config: { type: "string" },
-      json: { type: "boolean", default: false },
-      "no-llm": { type: "boolean", default: false },
-      family: { type: "string" },
-      scope: { type: "string" },
-      open: { type: "string" },
-      out: { type: "string" },
-      manifest: { type: "string" },
-      registry: { type: "string" },
-      deny: { type: "string" },
-      advisories: { type: "string" },
-      "allow-undetermined": { type: "boolean", default: false },
-      accept: { type: "string" },
-      help: { type: "boolean", short: "h", default: false },
-    },
-  });
+  let parsedArgs: ReturnType<typeof parseArgs>;
+  try {
+    parsedArgs = parseArgs({
+      args: [...argv],
+      allowPositionals: true,
+      options: {
+        config: { type: "string" },
+        json: { type: "boolean", default: false },
+        "no-llm": { type: "boolean", default: false },
+        family: { type: "string" },
+        scope: { type: "string" },
+        open: { type: "string" },
+        out: { type: "string" },
+        manifest: { type: "string" },
+        registry: { type: "string" },
+        deny: { type: "string" },
+        advisories: { type: "string" },
+        "allow-undetermined": { type: "boolean", default: false },
+        accept: { type: "string" },
+        version: { type: "boolean", short: "v", default: false },
+        help: { type: "boolean", short: "h", default: false },
+      },
+    });
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n\n${USAGE}`);
+    return 2;
+  }
+
+  const values = parsedArgs.values as {
+    config?: string;
+    json?: boolean;
+    "no-llm"?: boolean;
+    family?: string;
+    scope?: string;
+    open?: string;
+    out?: string;
+    manifest?: string;
+    registry?: string;
+    deny?: string;
+    advisories?: string;
+    "allow-undetermined"?: boolean;
+    accept?: string;
+    version?: boolean;
+    help?: boolean;
+  };
+  const positionals = parsedArgs.positionals;
+
+  if (values.version === true) {
+    process.stdout.write(`${CLI_VERSION}\n`);
+    return 0;
+  }
 
   const command = positionals[0];
 
@@ -103,7 +171,16 @@ async function main(argv: readonly string[]): Promise<number> {
     return command === undefined && values.help !== true ? 2 : 0;
   }
 
-  const config = await loadConfig(resolve(values.config ?? "config.json"));
+  let config: ReaClientConfig;
+  try {
+    config = await loadConfig(resolve(values.config ?? "config.json"));
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      process.stderr.write(`Configuration error (${error.message})\n`);
+      return 2;
+    }
+    throw error;
+  }
 
   switch (command) {
     case "doctor":
@@ -160,14 +237,21 @@ async function commandTools(
   family: string | undefined,
   scopeOption: string | undefined,
 ): Promise<number> {
-  const client = new ReaClient(config.rea);
+  const validatedScope = validateScopeOption(scopeOption, config);
+  if (!validatedScope.ok) {
+    process.stderr.write(`${validatedScope.message}\n`);
+    return 2;
+  }
+
+  const client = new ReaClient(config.rea, {
+    allowNonLoopback: config.policy.allowNonLoopback,
+  });
   try {
     await client.connect();
     const tools = await client.listTools();
     const catalog = ToolCatalog.from(tools);
 
-    const scope = (scopeOption ?? config.agent.toolScope) as typeof config.agent.toolScope;
-    const resolved = catalog.resolveScope(scope, config.agent.customTools);
+    const resolved = catalog.resolveScope(validatedScope.scope, config.agent.customTools);
 
     if (json) {
       process.stdout.write(
@@ -218,7 +302,10 @@ async function commandProbe(
 
   let path: string;
   try {
-    path = canonicalizeTargetPath(target, { platform: currentPlatform() });
+    path = canonicalizeTargetPath(target, {
+      platform: currentPlatform(),
+      allowNonLoopback: config.policy.allowNonLoopback,
+    });
   } catch (error) {
     if (error instanceof TargetPathError) {
       process.stderr.write(`${error.message}\n`);
@@ -227,31 +314,58 @@ async function commandProbe(
     throw error;
   }
 
-  const client = new ReaClient(config.rea);
+  const client = new ReaClient(config.rea, {
+    allowNonLoopback: config.policy.allowNonLoopback,
+  });
   try {
     await client.connect();
+    const catalog = ToolCatalog.from(await client.listTools());
     const opened = await client.callTool("open_binary", { path });
     const openObservation = projectToolResult(opened, { maxChars: 4_000 });
+    const openFailed =
+      opened.isError === true || openObservation.text.startsWith(ToolObservation.errorPrefix);
 
     const sessionResult = await client.callTool("binary_session", {});
     const session = readBinarySession(sessionResult);
 
-    const overview = await client.callTool("binary_overview", {});
-    const overviewObservation = projectToolResult(overview, { maxChars: 6_000 });
+    if (openFailed) {
+      if (json) {
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              ok: false,
+              open: openObservation.text,
+              session: session === undefined ? null : { ...session, raw: undefined },
+              overview: null,
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      } else {
+        process.stderr.write(`${openObservation.text}\n`);
+      }
+      return 1;
+    }
+
+    const overviewObservation = catalog.has("binary_overview")
+      ? projectToolResult(await client.callTool("binary_overview", {}), { maxChars: 6_000 })
+      : undefined;
 
     if (json) {
       process.stdout.write(
         `${JSON.stringify(
           {
+            ok: true,
             open: openObservation.text,
             session: session === undefined ? null : { ...session, raw: undefined },
-            overview: overviewObservation.text,
+            overview: overviewObservation?.text ?? null,
           },
           null,
           2,
         )}\n`,
       );
-      return overviewObservation.text.startsWith("TOOL_ERROR") ? 1 : 0;
+      return 0;
     }
 
     process.stdout.write(`Target: ${session?.targetPath ?? path}\n`);
@@ -260,7 +374,9 @@ async function commandProbe(
         `Format: ${session.format ?? "?"}  Arch: ${session.architecture ?? "?"}  Provider: ${session.providerId ?? "none"}\n`,
       );
     }
-    process.stdout.write(`\n${openObservation.text}\n\n${overviewObservation.text}\n`);
+    process.stdout.write(
+      `\n${openObservation.text}${overviewObservation === undefined ? "" : `\n\n${overviewObservation.text}`}\n`,
+    );
     return 0;
   } finally {
     await client.close();
@@ -280,28 +396,75 @@ async function commandAsk(
     return 2;
   }
 
-  const client = new ReaClient(config.rea);
+  const validatedScope = validateScopeOption(scopeOption, config);
+  if (!validatedScope.ok) {
+    process.stderr.write(`${validatedScope.message}\n`);
+    return 2;
+  }
+
+  let canonicalOpenPath: string | undefined;
+  if (openPath !== undefined) {
+    try {
+      canonicalOpenPath = canonicalizeTargetPath(openPath, {
+        platform: currentPlatform(),
+        allowNonLoopback: config.policy.allowNonLoopback,
+      });
+    } catch (error) {
+      if (error instanceof TargetPathError) {
+        process.stderr.write(`${error.message}\n`);
+        return 2;
+      }
+      throw error;
+    }
+  }
+
+  const client = new ReaClient(config.rea, {
+    allowNonLoopback: config.policy.allowNonLoopback,
+  });
   client.on("stderr", ({ line }) => {
     if (!json) process.stderr.write(`[rea] ${line}\n`);
   });
+
+  const controller = new AbortController();
+  const onSigint = (): void => {
+    controller.abort();
+  };
+  process.once("SIGINT", onSigint);
 
   try {
     await client.connect();
     const tools = await client.listTools();
     const catalog = ToolCatalog.from(tools);
-    const scope = catalog.resolveScope(
-      (scopeOption ?? config.agent.toolScope) as typeof config.agent.toolScope,
-      config.agent.customTools,
-    );
+    const scope = catalog.resolveScope(validatedScope.scope, config.agent.customTools);
 
-    let session = undefined;
-    if (openPath !== undefined) {
-      const path = canonicalizeTargetPath(openPath, { platform: currentPlatform() });
-      await client.callTool("open_binary", { path });
-      session = readBinarySession(await client.callTool("binary_session", {}));
-    } else {
-      session = readBinarySession(await client.callTool("binary_session", {}));
+    if (canonicalOpenPath !== undefined) {
+      const opened = await client.callTool("open_binary", { path: canonicalOpenPath });
+      if (opened.isError === true) {
+        const openError = projectToolResult(opened, { maxChars: 4_000 }).text;
+        if (json) {
+          process.stdout.write(
+            `${JSON.stringify(
+              {
+                content: "",
+                reason: "failed",
+                error: openError,
+                iterations: 0,
+                toolCallsExecuted: 0,
+                usage: null,
+                transcript: [],
+              },
+              null,
+              2,
+            )}\n`,
+          );
+        } else {
+          process.stderr.write(`${openError}\n`);
+        }
+        return 1;
+      }
     }
+
+    const session = readBinarySession(await client.callTool("binary_session", {}));
 
     const chat = new LlamaServerClient({
       baseUrl: config.llm.baseUrl,
@@ -310,17 +473,11 @@ async function commandAsk(
       allowNonLoopback: config.policy.allowNonLoopback,
     });
 
-    const agent = new AgentSession({
+    const agent = createAgentSession(config, {
       connection: client,
       chat,
       catalog,
       scope,
-      model: config.llm.model,
-      maxIterations: config.agent.maxIterations,
-      maxToolResultChars: config.agent.maxToolResultChars,
-      temperature: config.llm.temperature,
-      maxTokens: config.llm.maxTokens,
-      contextWindow: config.llm.contextWindow,
       systemPrompt: buildSystemPrompt({
         catalog,
         advertisedToolCount: scope.tools.length,
@@ -332,22 +489,19 @@ async function commandAsk(
       process.stderr.write(`[warn] scope "${scope.scope}" is missing: ${scope.missing.join(", ")}\n`);
     }
 
-    agent.on("assistant_delta", ({ text }) => {
-      if (!json) process.stdout.write(text);
-    });
-    agent.on("tool_call_started", ({ name, arguments: args }) => {
-      process.stderr.write(`\n  -> ${name} ${JSON.stringify(args)}\n`);
-    });
-    agent.on("tool_call_finished", ({ name, ok, elapsedMs, evidenceId }) => {
-      process.stderr.write(
-        `  <- ${ok ? "ok" : "ERROR"} ${name} (${String(elapsedMs)}ms${evidenceId === undefined ? "" : `, ${evidenceId.slice(0, 12)}`})\n`,
-      );
-    });
-
-    const controller = new AbortController();
-    process.once("SIGINT", () => {
-      controller.abort();
-    });
+    if (!json) {
+      agent.on("assistant_delta", ({ text }) => {
+        process.stdout.write(text);
+      });
+      agent.on("tool_call_started", ({ name, arguments: args }) => {
+        process.stderr.write(`\n  -> ${name} ${JSON.stringify(args)}\n`);
+      });
+      agent.on("tool_call_finished", ({ name, ok, elapsedMs, evidenceId }) => {
+        process.stderr.write(
+          `  <- ${ok ? "ok" : "ERROR"} ${name} (${String(elapsedMs)}ms${evidenceId === undefined ? "" : `, ${evidenceId.slice(0, 12)}`})\n`,
+        );
+      });
+    }
 
     const result = await agent.ask(question, { signal: controller.signal });
 
@@ -357,6 +511,7 @@ async function commandAsk(
           {
             content: result.content,
             reason: result.reason,
+            ...(result.error === undefined ? {} : { error: result.error }),
             iterations: result.iterations,
             toolCallsExecuted: result.toolCallsExecuted,
             usage: result.usage ?? null,
@@ -366,12 +521,19 @@ async function commandAsk(
           2,
         )}\n`,
       );
+    } else if (result.reason === "failed") {
+      process.stderr.write(`\nError: ${result.error ?? "Agent turn failed."}\n`);
+    } else if (result.reason === "max_iterations") {
+      process.stderr.write(`\n${result.content}\n`);
+    } else if (result.reason === "cancelled") {
+      process.stderr.write("\nCancelled.\n");
     } else {
-      process.stdout.write(`\n`);
+      process.stdout.write("\n");
     }
 
     return result.reason === "final_answer" ? 0 : 1;
   } finally {
+    process.off("SIGINT", onSigint);
     await client.close();
   }
 }
@@ -379,7 +541,12 @@ async function commandAsk(
 /** True when `candidate` resolves inside `directory`. */
 function isInside(directory: string, candidate: string): boolean {
   const relativeTo = relative(resolve(directory), resolve(candidate));
-  return relativeTo !== "" && !relativeTo.startsWith("..") && !isAbsolute(relativeTo);
+  return (
+    relativeTo !== "" &&
+    relativeTo !== ".." &&
+    !relativeTo.startsWith(`..${sep}`) &&
+    !isAbsolute(relativeTo)
+  );
 }
 
 interface VendorOptions {
@@ -454,7 +621,9 @@ async function vendorAdvisories(
   // reason is carried into the report so the verdict can explain itself.
   let tools: readonly McpToolDefinition[] | undefined;
   let surfaceUnavailableReason: string | undefined;
-  const client = new ReaClient(config.rea);
+  const client = new ReaClient(config.rea, {
+    allowNonLoopback: config.policy.allowNonLoopback,
+  });
   try {
     await client.connect();
     tools = await client.listTools();
@@ -549,23 +718,27 @@ async function vendorAdvisories(
     process.stdout.write(`note: ${report.surfaceUnavailableReason}\n\n`);
   }
 
-  const acceptedIds = new Set((report.accepted ?? []).map((entry) => entry.assessment.advisory.id));
+  const overdueIds = new Set(
+    (report.overdueReviews ?? []).map((entry) => entry.split(" ")[0] ?? entry),
+  );
   for (const entry of report.accepted ?? []) {
+    const statusLabel = overdueIds.has(entry.finding.id) ? "EXPIRED " : "ACCEPTED";
     process.stdout.write(
-      `ACCEPTED  ${entry.finding.id}  ${entry.finding.rationale}\n` +
+      `${statusLabel}  ${entry.finding.id}  ${entry.finding.rationale}\n` +
         `          mitigation: ${entry.finding.mitigation}\n` +
         `          reviewed ${entry.finding.reviewedAt}${entry.finding.reviewBy === undefined ? "" : `, review by ${entry.finding.reviewBy}`}\n\n`,
     );
   }
   for (const overdue of report.overdueReviews ?? []) {
-    process.stderr.write(`warning: accepted finding needs re-review: ${overdue}\n`);
+    process.stderr.write(`error: accepted finding expired and requires re-review: ${overdue}\n`);
   }
 
-  const blocking = report.blocking
-    .filter((assessment) => !acceptedIds.has(assessment.advisory.id))
-    .map((assessment) => `${assessment.advisory.id} (${assessment.verdict})`);
+  const blocking = report.blocking.map((assessment) => {
+    const suffix = overdueIds.has(assessment.advisory.id) ? ", acceptance expired" : "";
+    return `${assessment.advisory.id} (${assessment.verdict}${suffix})`;
+  });
 
-  if (blocking.length === 0) {
+  if (report.ok) {
     process.stdout.write(`OK  no reachable advisory at or above "${deny}"\n`);
     return 0;
   }
@@ -641,7 +814,7 @@ async function vendorManifest(directory: string, options: VendorOptions): Promis
       await writeFile(options.out, text, "utf8");
     }
 
-    if (options.json) {
+    if (options.json && options.out !== undefined) {
       process.stdout.write(
         `${JSON.stringify(
           {
@@ -651,7 +824,7 @@ async function vendorManifest(directory: string, options: VendorOptions): Promis
             files: manifest.files.length,
             totalBytes: manifest.totalBytes,
             tarballIntegrity: manifest.tarballIntegrity,
-            writtenTo: options.out ?? null,
+            writtenTo: options.out,
           },
           null,
           2,

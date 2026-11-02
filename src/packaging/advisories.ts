@@ -251,9 +251,41 @@ export interface InstalledCopy {
 }
 
 interface LockfileEntry {
+  name?: string;
   version?: string;
   resolved?: string;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}
+
+function declaresDependency(entry: LockfileEntry | undefined, packageName: string): boolean {
+  if (entry === undefined) return false;
+  return (
+    entry.dependencies?.[packageName] !== undefined ||
+    entry.devDependencies?.[packageName] !== undefined ||
+    entry.optionalDependencies?.[packageName] !== undefined
+  );
+}
+
+/**
+ * Resolves `packageName` from `requesterPath` using Node's upward `node_modules`
+ * lookup rules against `package-lock.json` `packages`.
+ */
+function resolveLockfileTarget(
+  packages: Readonly<Record<string, LockfileEntry>>,
+  requesterPath: string,
+  packageName: string,
+): string | undefined {
+  let cursor = requesterPath;
+  for (;;) {
+    const candidate =
+      cursor === "" ? `node_modules/${packageName}` : `${cursor}/node_modules/${packageName}`;
+    if (packages[candidate]?.version !== undefined) return candidate;
+    if (cursor === "") return undefined;
+    const parentSplit = cursor.lastIndexOf("/node_modules/");
+    cursor = parentSplit === -1 ? "" : cursor.slice(0, parentSplit);
+  }
 }
 
 /**
@@ -277,7 +309,7 @@ export async function installedCopies(
   }
 
   const packages = parsed.packages ?? {};
-  const copies: InstalledCopy[] = [];
+  const requiredByMap = new Map<string, string[]>();
 
   for (const [path, entry] of Object.entries(packages)) {
     if (path === "") continue;
@@ -287,30 +319,29 @@ export async function installedCopies(
     const leaf = segments[segments.length - 1];
     if (leaf !== packageName) continue;
     if (entry.version === undefined) continue;
+    requiredByMap.set(path, []);
+  }
 
+  for (const [requesterPath, requesterEntry] of Object.entries(packages)) {
+    if (!declaresDependency(requesterEntry, packageName)) continue;
+    const resolvedPath = resolveLockfileTarget(packages, requesterPath, packageName);
+    if (resolvedPath === undefined) continue;
+    const list = requiredByMap.get(resolvedPath);
+    if (list === undefined) continue;
+    const label = requesterPath === "" ? "(root)" : requesterEntry.name ?? requesterPath;
+    if (!list.includes(label)) list.push(label);
+  }
+
+  const copies: InstalledCopy[] = [];
+  for (const [path, requiredBy] of requiredByMap.entries()) {
+    const entry = packages[path];
+    if (entry?.version === undefined) continue;
+    requiredBy.sort();
     copies.push({
       path,
       version: entry.version,
-      requiredBy: [],
+      requiredBy,
     });
-  }
-
-  // Attribute each copy to the nearest enclosing package that depends on it.
-  for (const copy of copies) {
-    const parentPath = copy.path.slice(0, copy.path.lastIndexOf("/node_modules/"));
-    const candidates = [
-      parentPath === "" ? "" : parentPath,
-      "",
-    ];
-    for (const candidate of candidates) {
-      const parent = packages[candidate];
-      if (parent?.dependencies?.[packageName] === undefined) continue;
-      const name = candidate === ""
-        ? "(root)"
-        : (packages[candidate] as { name?: string }).name ?? candidate;
-      (copy.requiredBy as string[]).push(name);
-      break;
-    }
   }
 
   copies.sort((a, b) => (a.path < b.path ? -1 : 1));
@@ -699,21 +730,26 @@ export async function assessDependency(options: AssessOptions): Promise<Advisory
   const known = options.knownFindings ?? [];
   const accepted: { assessment: AdvisoryAssessment; finding: KnownFinding }[] = [];
   const blocking: AdvisoryAssessment[] = [];
+  const overdueReviews: string[] = [];
+  const today = new Date().toISOString().slice(0, 10);
 
   for (const assessment of candidateBlocking) {
     const finding = known.find(
       (entry) => entry.id === assessment.advisory.id && entry.package === options.packageName,
     );
-    if (finding === undefined) blocking.push(assessment);
-    else accepted.push({ assessment, finding });
-  }
+    if (finding === undefined) {
+      blocking.push(assessment);
+      continue;
+    }
 
-  // An acceptance older than its own review date is a stale decision, not a
-  // standing one -- surface it rather than letting it pass quietly.
-  const today = new Date().toISOString().slice(0, 10);
-  const overdueReviews = accepted
-    .filter((entry) => entry.finding.reviewBy !== undefined && entry.finding.reviewBy < today)
-    .map((entry) => `${entry.finding.id} (review by ${entry.finding.reviewBy ?? "?"})`);
+    accepted.push({ assessment, finding });
+    // An acceptance older than its own review date is an expired decision, not
+    // a standing waiver -- surface it and keep the gate failing until renewed.
+    if (finding.reviewBy !== undefined && finding.reviewBy < today) {
+      overdueReviews.push(`${finding.id} (review by ${finding.reviewBy})`);
+      blocking.push(assessment);
+    }
+  }
 
   return {
     package: options.packageName,

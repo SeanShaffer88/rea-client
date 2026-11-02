@@ -2,7 +2,7 @@
   "rea": {
     "transport": "stdio",
     "command": "node",
-    "args": ["rea/scripts/rea.mjs", "mcp"],
+    "args": ["node_modules/rea-agents/scripts/rea.mjs", "mcp"],
     "env": {
       "NODE_ENV": "production",
       "REA_LOG_LEVEL": "info"
@@ -21,7 +21,10 @@
     "maxIterations": 8,
     "maxToolResultChars": 12000,
     "toolScope": "binary-core",
-    "customTools": []
+    "customTools": [],
+    "maxArgumentArrayItems": 2048,
+    "maxArgumentBytes": 262144,
+    "allowUnscopedTools": false
   },
   "policy": {
     "allowNonLoopback": false

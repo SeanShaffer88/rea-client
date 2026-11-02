@@ -13,11 +13,12 @@
 import { access, mkdir, constants } from "node:fs/promises";
 import { join } from "node:path";
 import type { ReaClientConfig } from "./config.js";
-import { isLoopbackHostname } from "./platform/net.js";
+import { assertLoopbackUrl, isLoopbackHostname } from "./platform/net.js";
 import { ToolCatalog } from "./mcp/catalog.js";
 import { ReaClient } from "./mcp/ReaClient.js";
 import { readBinarySession } from "./mcp/session.js";
 import type { BinarySessionSummary } from "./mcp/types.js";
+import { isValidSemver, satisfiesRange } from "./packaging/semver.js";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "skipped";
 
@@ -39,9 +40,11 @@ export interface DoctorReport {
 
 /** REA 6.8.0 requires Node ^22.23.4 || ^24.22.1 || >=26.12.1. */
 const MIN_NODE_MAJOR = 22;
+const REA_DECLARED_NODE_RANGE = ">= 22.23.4 < 23.0.0 || >= 24.22.1 < 25.0.0 || >= 26.12.1";
+const VALIDATED_REA_VERSION = "6.8.0";
 
-function checkNodeVersion(): CheckResult {
-  const [major] = process.versions.node.split(".").map(Number);
+export function checkNodeVersion(nodeVersion: string = process.versions.node): CheckResult {
+  const [major] = nodeVersion.split(".").map(Number);
   const majorNumber = major ?? 0;
 
   if (majorNumber < MIN_NODE_MAJOR) {
@@ -49,25 +52,26 @@ function checkNodeVersion(): CheckResult {
       id: "node-version",
       label: "Node.js runtime",
       status: "fail",
-      detail: `Node ${process.versions.node} is too old for REA 6.8.x.`,
-      remediation: "Ship Node 22.23.4+ (or 24.x / 26.x) with the bundle.",
+      detail: `Node ${nodeVersion} is too old for REA 6.8.x.`,
+      remediation: "Ship Node 22.23.4+ (or 24.22.1+ / 26.12.1+) with the bundle.",
     };
   }
 
-  // REA's own engine range is narrower than this floor; matching it exactly
-  // avoids surprising differences between the bundled and reference runtimes.
-  const tooOldForRea =
-    majorNumber === 22 && Number(process.versions.node.split(".")[1] ?? 0) < 23;
+  // REA's own engine range is narrower than the major-22 floor; matching it
+  // exactly avoids surprising differences between bundled and reference runtimes.
+  const inDeclaredRange =
+    isValidSemver(nodeVersion) && satisfiesRange(nodeVersion, REA_DECLARED_NODE_RANGE);
+
   return {
     id: "node-version",
     label: "Node.js runtime",
-    status: tooOldForRea ? "warn" : "ok",
-    detail: tooOldForRea
-      ? `Node ${process.versions.node} runs REA but is below its declared engine range (^22.23.4).`
-      : `Node ${process.versions.node}`,
-    ...(tooOldForRea
-      ? { remediation: "Bundle the Node version REA declares in its package.json engines field." }
-      : {}),
+    status: inDeclaredRange ? "ok" : "warn",
+    detail: inDeclaredRange
+      ? `Node ${nodeVersion}`
+      : `Node ${nodeVersion} runs REA but is outside its declared engine range (^22.23.4 || ^24.22.1 || >=26.12.1).`,
+    ...(inDeclaredRange
+      ? {}
+      : { remediation: "Bundle a Node version matching REA's package.json engines field." }),
   };
 }
 
@@ -143,7 +147,9 @@ async function checkRea(config: ReaClientConfig): Promise<{
   readonly serverVersion?: string;
   readonly session?: BinarySessionSummary;
 }> {
-  const client = new ReaClient(config.rea);
+  const client = new ReaClient(config.rea, {
+    allowNonLoopback: config.policy.allowNonLoopback,
+  });
   try {
     await client.connect();
     const tools = await client.listTools();
@@ -156,6 +162,11 @@ async function checkRea(config: ReaClientConfig): Promise<{
     if (session?.catalogToolCount !== undefined && session.catalogToolCount !== tools.length) {
       problems.push(
         `tools/list returned ${tools.length} but binary_session reports ${session.catalogToolCount}`,
+      );
+    }
+    if (session?.packageVersion !== undefined && session.packageVersion !== VALIDATED_REA_VERSION) {
+      problems.push(
+        `rea-agents ${session.packageVersion} differs from validated ${VALIDATED_REA_VERSION}`,
       );
     }
     const catalog = ToolCatalog.from(tools);
@@ -175,11 +186,11 @@ async function checkRea(config: ReaClientConfig): Promise<{
         label: "REA MCP server",
         status: problems.length === 0 ? "ok" : "warn",
         detail: problems.length === 0 ? detailParts.join(" · ") : problems.join("; "),
-        ...(session?.packageVersion === undefined
+        ...(problems.length === 0
           ? {}
           : {
               remediation:
-                "Pin rea-agents to the version this client was validated against (6.8.0).",
+                `Pin rea-agents to the version this client was validated against (${VALIDATED_REA_VERSION}).`,
             }),
       },
       catalogSize: tools.length,
@@ -238,15 +249,26 @@ function checkProviders(session: BinarySessionSummary | undefined): CheckResult 
 async function checkLlm(config: ReaClientConfig, fetchImpl: typeof fetch): Promise<CheckResult> {
   const base = config.llm.baseUrl.replace(/\/+$/, "");
   const url = `${base}/models`;
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (config.llm.apiKey !== undefined && config.llm.apiKey !== "") {
+    headers["authorization"] = `Bearer ${config.llm.apiKey}`;
+  }
   try {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(5_000) });
+    assertLoopbackUrl(url, { allowNonLoopback: config.policy.allowNonLoopback });
+    const response = await fetchImpl(url, {
+      headers,
+      signal: AbortSignal.timeout(5_000),
+    });
     if (!response.ok) {
       return {
         id: "llm",
         label: "Local model server",
         status: "fail",
         detail: `${url} returned HTTP ${response.status}.`,
-        remediation: "Start llama-server.exe with --port matching llm.baseUrl.",
+        remediation:
+          response.status === 401 || response.status === 403
+            ? "Check llm.apiKey against the --api-key passed to llama-server.exe."
+            : "Start llama-server.exe with --port matching llm.baseUrl.",
       };
     }
     const body = (await response.json()) as { data?: Array<{ id?: string }> };
@@ -275,6 +297,8 @@ export interface DoctorOptions {
   /** Skips the LLM probe, for a toolchain-only check. */
   readonly skipLlm?: boolean;
   readonly fetchImpl?: typeof fetch;
+  /** Injected for tests; defaults to `process.versions.node`. */
+  readonly nodeVersion?: string;
 }
 
 export async function runDoctor(
@@ -283,7 +307,7 @@ export async function runDoctor(
 ): Promise<DoctorReport> {
   const checks: CheckResult[] = [];
 
-  checks.push(checkNodeVersion());
+  checks.push(checkNodeVersion(options.nodeVersion));
   checks.push(checkLoopbackPolicy(config));
   checks.push(await checkWorkspace(config));
 
