@@ -3968,3 +3968,134 @@ kbd {
     scroll-behavior: auto !important;
   }
 }
+
+/* Retained evidence bundle ------------------------------------------------ */
+.retained-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.retained-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.retained-heading h2 {
+  margin: 2px 0 4px;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+.retained-heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.retained-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.retained-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.retained-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.retained-row:hover {
+  border-color: var(--accent-line);
+}
+
+.retained-row.open {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.retained-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.retained-row-main strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.retained-row-main span {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retained-id {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--surface-sunken);
+  white-space: nowrap;
+}
+
+.retained-record {
+  padding: 8px 4px 4px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.retained-conflict {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--amber-soft);
+  border-radius: var(--radius-sm);
+  background: var(--amber-soft);
+}
+
+.retained-conflict .small {
+  flex: 1;
+  min-width: 200px;
+}
+
+.record-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 6px 2px;
+}

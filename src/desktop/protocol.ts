@@ -24,6 +24,50 @@ export interface ToolDetail {
   family: string;
   inScope: boolean;
 }
+/**
+ * One retained REA evidence record, as reported by the engine's
+ * `get_evidence_bundle` summary. Absent fields mean REA did not report them;
+ * they are not filled in with guesses.
+ */
+export interface RetainedEvidenceSummary {
+  evidenceId: string;
+  operation?: string;
+  subjectName?: string;
+  subjectSha256?: string;
+  subjectFormat?: string;
+  providerId?: string;
+  confidence?: string;
+  authority?: string;
+  retention?: string;
+  limitationCount?: number;
+}
+export interface EvidenceInventorySnapshot {
+  ok: boolean;
+  /** Present when the engine could not read the bundle. */
+  error?: string;
+  totalRetained: number;
+  matching: number;
+  unknownRevisions: number;
+  records: RetainedEvidenceSummary[];
+}
+export interface EvidenceRecordSnapshot {
+  ok: boolean;
+  evidenceId: string;
+  /** Pretty-printed retained record; untrusted target-derived content. */
+  text: string;
+  truncated: boolean;
+  untrusted: boolean;
+  error?: string;
+}
+export interface EvidenceExportSnapshot {
+  ok: boolean;
+  /** Absolute path of the canonical bundle the engine wrote. */
+  path?: string;
+  bytes?: number;
+  records?: number;
+  unknowns?: number;
+  error?: string;
+}
 export interface TargetSnapshot {
   ok: boolean;
   observation?: string;

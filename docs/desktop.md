@@ -88,6 +88,17 @@ does not touch a binary or a model.
   (`schemaVersion: 1`) containing the same turns, observations, and diagnostics.
   Observation previews are fenced with a backtick run longer than anything they
   contain, so untrusted target text cannot break out of its block.
+- **Retained evidence** — the canvas above is fed by this session's turns, not
+  by REA's own store. The workspace therefore also lists what REA *retained*:
+  `evidence.list` reads `get_evidence_bundle { detail: "summary" }`, so the page
+  shows REA's own totals (`total_retained_records`, `matching_records`,
+  `unknown_revisions`) instead of counting what happened to render. Opening a
+  row calls `evidence.get`, which confirms the id is retained and then returns
+  that one record. *Export bundle* writes the canonical bundle with
+  `export_evidence_bundle` into `<workspaceDir>/evidence/`, and the toast
+  reports what the engine says it wrote (bytes, records, unknowns, path). An
+  existing file is never replaced silently: REA's refusal is shown with an
+  explicit *Overwrite the existing bundle* action.
 - **Diagnostics** — `engine.doctor` verdicts with remediation, reconnection, and
   a live engine event log.
 - **Settings** — read-only model/network/scope configuration, workspace
@@ -95,6 +106,10 @@ does not touch a binary or a model.
 
 ## Security boundaries
 
+- **Evidence exports stay in the workspace.** The bridge, not the page, picks
+  the export directory (`<workspaceDir>/evidence/`), rejects any name with a
+  path separator, and creates the directory with `0700`. The file itself is
+  written by REA, so it is the canonical bundle rather than a re-serialisation.
 - **Same-origin only.** Host and `Origin`/`Sec-Fetch-Site` are checked exactly;
   there is no CORS. A random 256-bit token is required on every API request
   except the bootstrap document, and it lives only in page memory. Shared
@@ -148,6 +163,19 @@ the field keep the old behaviour.
 - `agent.transcript` is used to rehydrate the visible conversation after a
   reload; system and tool messages are dropped, and no transcript content is
   written to browser storage.
+- `evidence.list` — wraps `get_evidence_bundle { detail: "summary" }` and
+  returns only the inventory. Full records are never copied into a listing.
+- `evidence.get { evidenceId }` — accepts only `ev_` followed by 64 lowercase
+  hex characters, proves the id is retained with a filtered summary, then reads
+  the record through `get_evidence_bundle { detail: "complete", filters:
+  { evidence_id } }`. The returned record is matched again by id (a server that
+  ignores the filter cannot make the panel display a different observation),
+  capped at 200 000 characters for display, and marked untrusted.
+- `evidence.export { name?, overwrite? }` — names, validates (letters, digits,
+  `.`, `-`, `_`; no path separators) and resolves the destination itself inside
+  `<workspaceDir>/evidence/`, creating it `0700`, then calls
+  `export_evidence_bundle` with that absolute path. The renderer cannot choose a
+  directory.
 - `target.probe` now distinguishes an opened target from an unavailable
   overview: `{ ok: true, overview: null, overviewError: "..." }`. An error string
   is never presented as analysis output.
@@ -179,6 +207,14 @@ real ELF target (`/usr/bin/ls`):
   overlay renders and cancels the browser's default, and both export buttons
   produced `rea-analysis-YYYY-MM-DD.md` / `.json` containing the turn, the
   evidence ID, and `schemaVersion: 1`.
+- The canonical bundle path was exercised live as well: `evidence.list` called
+  the real `get_evidence_bundle` (empty inventory, `totalRetained: 0`, honestly
+  rendered as the empty state), `evidence.export` wrote a 105-byte canonical
+  bundle (`{"artifacts":[],"captures":[],"environments":[],"providers":[],
+  "records":[],"scenarios":[],"unknowns":[]}`) with `0600` permissions inside
+  `workspace/evidence/`, and a second export of the same name returned REA's
+  `Evidence file already exists. Choose another path or allow overwrite.`
+  unchanged; `overwrite: true` then succeeded.
 - `npm run typecheck`, `npm run typecheck:desktop`, all unit tests, and the
   coverage gate pass.
 
@@ -191,7 +227,10 @@ Automated coverage for the desktop tier:
 | Electron trust rules | `test/unit/desktopSecurity.test.ts` — navigation/IPC origins and locked-down `webPreferences` |
 | Streaming UI state | `test/unit/desktopState.test.ts` — deltas, tool activity, completion, interruption |
 | API client | `test/unit/uiApi.test.ts` — 401 re-bootstrap, upload contract, error surfacing |
-| Rendered App | `test/unit/uiApp.test.tsx` (jsdom) — boot, catalog, diagnostics, target open, overview failure, retry, transcript restore, report export, drop overlay |
+| Rendered App | `test/unit/uiApp.test.tsx` (jsdom) — boot, catalog, diagnostics, target open, overview failure, retry, transcript restore, report export, retained-evidence listing/record/export/overwrite, drop overlay |
+| Retained evidence readers | `test/unit/evidenceBundle.test.ts` — summary envelope, text fallback, id filtering, record selection, export result |
+| Evidence display helpers | `test/unit/uiEvidence.test.ts` — id shortening, filtering, honest counts, export summary, conflict detection |
+| Bridge RPC surface | `test/unit/jsonRpcServer.test.ts` — evidence id validation, summary-only listing, single-record reads, workspace-contained exports |
 | Report export | `test/unit/report.test.ts` — turn pairing, per-target attribution, Markdown fencing, file names |
 | Drop routing | `test/unit/drop.test.ts` — open-in-place vs upload vs reject |
 
@@ -209,8 +248,14 @@ Not verified here, and not claimed:
 - **No screenshot-based visual regression.** CSS is reviewed for layout and
   responsive breakpoints, but no rendering engine with layout was available.
 - **No live model turn.** There is no `llama-server` in the sandbox, so the
-  conversation, streaming-tool-activity, stop, and evidence-population paths are
-  covered by unit tests and reducer tests rather than a live model.
+  conversation, streaming-tool-activity, stop, and in-page evidence-population
+  paths are covered by unit tests and reducer tests rather than a live model.
+- **A populated retained-evidence list was not produced live.** REA retains
+  observations per MCP session, and the tools that create them only run during
+  an agent turn. The live engine therefore reported an empty bundle; the
+  populated list, record expansion, and short/long-id behaviour are covered by
+  the fake-REA unit tests. The empty case, the export, and the conflict path
+  were verified against the real server.
 
 ## Troubleshooting
 

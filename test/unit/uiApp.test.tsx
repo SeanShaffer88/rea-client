@@ -77,6 +77,27 @@ const DOCTOR = {
   serverVersion: "6.8.0",
 };
 
+const EVIDENCE_ID = `ev_${"4e8c8fb7".repeat(8)}`;
+
+const EVIDENCE_INVENTORY = {
+  ok: true,
+  totalRetained: 2,
+  matching: 2,
+  unknownRevisions: 0,
+  records: [
+    {
+      evidenceId: EVIDENCE_ID,
+      operation: "inspect_artifact",
+      subjectName: "/usr/bin/ls",
+      providerId: "rea-binary",
+      confidence: "high",
+      authority: "observed",
+      retention: "session",
+    },
+    { evidenceId: `ev_${"1f".repeat(32)}`, operation: "xrefs", subjectName: "ntdll.dll" },
+  ],
+};
+
 type Handler = (params: Record<string, unknown>) => StubOptions;
 
 function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ method: string; params: Record<string, unknown> }> } {
@@ -120,6 +141,21 @@ function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ 
     "target.close": () => ({ body: { result: { ok: true, session: null } } }),
     "agent.ask": () => ({ body: { result: { content: "Done.", reason: "final_answer", iterations: 1, toolCallsExecuted: 0, usage: null, transcriptLength: 3 } } }),
     "agent.transcript": () => ({ body: { result: { messages: [] } } }),
+    "evidence.list": () => ({ body: { result: EVIDENCE_INVENTORY } }),
+    "evidence.get": ({ evidenceId }) => ({
+      body: {
+        result: {
+          ok: true,
+          evidenceId,
+          text: JSON.stringify({ evidence_id: evidenceId, imports: ["puts"] }, null, 2),
+          truncated: false,
+          untrusted: true,
+        },
+      },
+    }),
+    "evidence.export": () => ({
+      body: { result: { ok: true, path: "/tmp/workspace/evidence/bundle.json", bytes: 8117, records: 2, unknowns: 0 } },
+    }),
   };
 
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -292,6 +328,59 @@ describe("App", () => {
     } finally {
       click.mockRestore();
     }
+  });
+
+  it("lists retained evidence, opens one record, and exports the bundle", async () => {
+    const { calls } = installFetch();
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+
+    await waitFor("retained rows", () => document.querySelectorAll(".retained-row").length === 2);
+    expect(calls.some((call) => call.method === "evidence.list")).toBe(true);
+    expect(document.querySelector(".retained-heading")?.textContent).toContain("2 retained records · 0 unknown revisions");
+    expect(document.querySelectorAll(".retained-row")[1]?.textContent).toContain("xrefs");
+
+    await act(async () => (document.querySelectorAll(".retained-row")[0] as HTMLButtonElement).click());
+    await waitFor("retained record", () => document.querySelector(".retained-record .code-panel") !== null);
+    expect(calls.at(-1)).toEqual({ method: "evidence.get", params: { evidenceId: EVIDENCE_ID } });
+    expect(document.querySelector(".retained-record")?.textContent).toContain("puts");
+
+    await act(async () => (document.querySelectorAll(".retained-row")[0] as HTMLButtonElement).click());
+    expect(document.querySelector(".retained-record")).toBeNull();
+
+    await act(async () => buttonWith("Export bundle")?.click());
+    await waitFor("export toast", () => (document.querySelector(".toast")?.textContent ?? "").includes("Evidence bundle exported"));
+    expect(calls.at(-1)).toEqual({ method: "evidence.export", params: {} });
+    expect(document.querySelector(".toast")?.textContent).toContain("2 records · 0 unknowns");
+  });
+
+  it("filters retained records and offers an overwrite when the bundle exists", async () => {
+    installFetch({
+      "evidence.export": ({ overwrite }) =>
+        overwrite === true
+          ? { body: { result: { ok: true, path: "/tmp/workspace/evidence/bundle.json", bytes: 8117, records: 2, unknowns: 0 } } }
+          : { body: { result: { ok: false, error: "EEXIST: file already exists, open '/tmp/workspace/evidence/bundle.json'" } } },
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("retained rows", () => document.querySelectorAll(".retained-row").length === 2);
+
+    const search = document.querySelector('input[aria-label="Search evidence"]') as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(search, "xrefs");
+      search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await waitFor("filtered rows", () => document.querySelectorAll(".retained-row").length === 1);
+
+    await act(async () => buttonWith("Export bundle")?.click());
+    await waitFor("conflict", () => buttonWith("Overwrite the existing bundle") !== undefined);
+    expect(document.querySelector(".error-notice")?.textContent).toContain("already exists");
+
+    await act(async () => buttonWith("Overwrite the existing bundle")?.click());
+    await waitFor("overwrite toast", () => (document.querySelector(".toast")?.textContent ?? "").includes("Evidence bundle exported"));
   });
 
   it("shows a drop target while files hover and explains a rejected drop", async () => {

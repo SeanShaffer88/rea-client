@@ -232,3 +232,29 @@ live server:
   unavailable.** The providers check means at least one provider is registered;
   it is not a per-format guarantee. The UI keeps the per-call failure visible
   instead of inferring capability from the aggregate check.
+- **Retained evidence is per MCP session.** `get_evidence_bundle` reports
+  `kind: "evidence-bundle-summary"` with `total_retained_records`,
+  `matching_records`, `unknown_revisions` and one row per record
+  (`evidence_id`, `subject{name,digest.sha256,format}`, `provider`,
+  `operation`, `confidence`, `authority`, `retention`,
+  `limitation_count`, `native_dossier`). Records carry `retention: "session"`,
+  and only analysis tools (`inspect_artifact`, procedure/segment/string reads)
+  create them — `open_binary` and `binary_session` do not. A fresh engine with
+  no model turn therefore answers `total_retained_records: 0`, which is what the
+  workspace shows rather than an invented list.
+- **`detail: "summary"` is the only safe listing payload.** `detail: "complete"`
+  copies the full records (nested artifact graphs), so the bridge never requests
+  it without `filters.evidence_id`; a summary request with
+  `filters: { evidence_id }` is the cheap way to check whether an id is retained
+  before paying for the record.
+- **Evidence ids are `ev_` + 64 lowercase hex characters.** They are stable
+  references, so the workspace validates the shape and re-checks the returned
+  record's id instead of trusting a filter it cannot see applied.
+- **`export_evidence_bundle` needs an absolute path and a boolean `overwrite`,**
+  and writes byte-stable JSON beginning
+  `{"artifacts":[…],"captures":[],"environments":[],"providers":[…]}`; the result
+  is `{ path, bytes, records, unknowns }`. Re-exporting to an existing file fails
+  with `invalid_request (invalid_input)` and the message *"Evidence file already
+  exists. Choose another path or allow overwrite."* The bridge resolves the path
+  itself (`<workspaceDir>/evidence/<name>.json`, directory `0700`) so the
+  renderer never chooses a destination.
