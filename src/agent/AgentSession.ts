@@ -25,6 +25,8 @@ import type { ReaClientConfig } from "../config.js";
 import type { ToolCatalog, ScopeResolution } from "../mcp/catalog.js";
 import { ToolObservation, projectToolResult } from "../mcp/evidence.js";
 import type { McpConnection } from "../mcp/ReaClient.js";
+import { readBinarySession } from "../mcp/session.js";
+import type { BinarySessionSummary } from "../mcp/types.js";
 import { buildFunctionDefinitions, type MappedToolSet } from "../llm/toolSchema.js";
 import { collectTurn } from "../llm/turn.js";
 import type {
@@ -41,6 +43,7 @@ import {
   checkToolArguments,
   type ArgumentGuardLimits,
 } from "./argumentGuard.js";
+import { buildSystemPrompt } from "./prompt.js";
 
 export type ExtraToolHandler = (
   args: Record<string, unknown>,
@@ -76,6 +79,12 @@ export interface AgentSessionOptions {
    * dynamic-execution or disk-write tools.
    */
   readonly allowUnscopedTools?: boolean;
+  /**
+   * Optional callback used to rebuild the system message after `open_binary`
+   * or `close_binary` succeeds, keeping multi-turn sessions synchronized with
+   * the currently open target.
+   */
+  readonly buildPromptForSession?: (session: BinarySessionSummary | undefined) => string;
 }
 
 export interface AskOptions {
@@ -126,6 +135,31 @@ export class AgentSession extends Emitter<AgentEvents> {
   /** Copy of the live transcript, for rendering or persistence. */
   public transcript(): readonly ChatMessage[] {
     return [...this.messages];
+  }
+
+  public get isRunning(): boolean {
+    return this.running;
+  }
+
+  /** Updates the leading `{ role: "system" }` prompt in place without losing history. */
+  public setSystemPrompt(systemPrompt: string): void {
+    if (this.messages[0]?.role === "system") {
+      this.messages[0] = { role: "system", content: systemPrompt };
+    } else {
+      this.messages.unshift({ role: "system", content: systemPrompt });
+    }
+  }
+
+  /** Replaces conversational history after the leading system message. */
+  public replaceHistory(history: readonly ChatMessage[]): void {
+    if (this.running) {
+      throw new Error("Cannot replace history while AgentSession.ask() is running.");
+    }
+    const system = this.messages[0]?.role === "system"
+      ? this.messages[0]
+      : { role: "system" as const, content: this.options.systemPrompt };
+    this.messages.length = 0;
+    this.messages.push(system, ...history.filter((msg) => msg.role !== "system"));
   }
 
   public reset(): void {
@@ -402,6 +436,25 @@ export class AgentSession extends Emitter<AgentEvents> {
       observation = projectToolResult(result, {
         maxChars: this.options.maxToolResultChars,
       });
+      if (
+        result.isError !== true &&
+        !observation.text.startsWith(ToolObservation.errorPrefix) &&
+        (mcpName === "open_binary" || mcpName === "close_binary") &&
+        this.options.buildPromptForSession !== undefined &&
+        this.options.catalog.has("binary_session")
+      ) {
+        try {
+          const sessionResult = await this.options.connection.callTool("binary_session", {}, {
+            timeoutMs: this.options.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
+            ...(askOptions.signal === undefined ? {} : { signal: askOptions.signal }),
+          });
+          this.setSystemPrompt(
+            this.options.buildPromptForSession(readBinarySession(sessionResult)),
+          );
+        } catch {
+          // Non-fatal: the primary open_binary / close_binary observation already succeeded.
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       observation = ToolObservation.fromError(message);
@@ -552,7 +605,7 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
-/** Convenience builder used by the CLI and by tests. */
+/** Convenience builder used by the CLI, bridge, and tests. */
 export function createAgentSession(
   config: ReaClientConfig,
   parts: {
@@ -561,14 +614,29 @@ export function createAgentSession(
     readonly catalog: ToolCatalog;
     readonly scope: ScopeResolution;
     readonly systemPrompt: string;
+    readonly extraInstructions?: string | undefined;
+    readonly buildPromptForSession?:
+      | ((session: BinarySessionSummary | undefined) => string)
+      | undefined;
   },
 ): AgentSession {
+  const buildPromptForSession =
+    parts.buildPromptForSession ??
+    ((session: BinarySessionSummary | undefined) =>
+      buildSystemPrompt({
+        catalog: parts.catalog,
+        advertisedToolCount: parts.scope.tools.length,
+        session,
+        extraInstructions: parts.extraInstructions,
+      }));
+
   return new AgentSession({
     connection: parts.connection,
     chat: parts.chat,
     catalog: parts.catalog,
     scope: parts.scope,
     systemPrompt: parts.systemPrompt,
+    buildPromptForSession,
     model: config.llm.model,
     maxIterations: config.agent.maxIterations,
     maxToolResultChars: config.agent.maxToolResultChars,

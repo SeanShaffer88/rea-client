@@ -22,8 +22,8 @@
     "maxToolResultChars": 12000,
     "toolScope": "binary-core",
     "customTools": [],
-    "maxArgumentArrayItems": 2048,
-    "maxArgumentBytes": 262144,
+    "maxArgumentArrayItems": 256,
+    "maxArgumentBytes": 65536,
     "allowUnscopedTools": false
   },
   "policy": {

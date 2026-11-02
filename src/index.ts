@@ -195,3 +195,17 @@ export {
   type ArgumentGuardResult,
 } from "./agent/argumentGuard.js";
 export { Emitter } from "./util/emitter.js";
+export {
+  EngineRpcServer,
+  JSON_RPC_ERRORS,
+  JsonRpcException,
+  type EngineRpcServerOptions,
+  type JsonRpcErrorObject,
+  type JsonRpcErrorResponse,
+  type JsonRpcId,
+  type JsonRpcNotification,
+  type JsonRpcOutboundMessage,
+  type JsonRpcRequest,
+  type JsonRpcSuccessResponse,
+  type ManagedMcpConnection,
+} from "./bridge/JsonRpcServer.js";

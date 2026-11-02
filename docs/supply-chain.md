@@ -141,9 +141,9 @@ a range the semver matcher cannot parse is treated as affecting, never as safe.
 
 `--accept` reads findings that were reviewed and accepted. Each entry requires a
 `rationale`, a `mitigation`, and a `reviewedAt` date; `reviewBy` marks when the
-decision must be revisited, and an expired acceptance prints a warning. A
-suppression list without reasons is how regressions get buried, so the file
-format refuses entries that lack them.
+decision must be revisited, and an expired acceptance fails `report.ok` and
+exits non-zero until re-reviewed. A suppression list without reasons is how
+regressions get buried, so the file format refuses entries that lack them.
 
 ### The compensating control
 
@@ -185,8 +185,9 @@ upgrade cannot quietly vendor a tree that the registry never served.
 - **Store manifests outside the tree they describe.** A manifest written into the
   package directory is itself an unexpected file; `vendor verify` warns about
   this explicitly.
-- **Symlinks are hashed by target string**, not by content, so a retargeted link
-  is reported as drift rather than followed.
+- **Symlinks are hashed by target string** (with NTFS `\` separators normalized
+  to `/`), not by content, so a retargeted link is reported as drift rather than
+  followed and manifests verify identically across Linux and Windows.
 - **Path traversal and absolute entries in an archive are rejected**, so a
   malicious tarball cannot write outside the expected root.
 - **The tar reader is intentionally narrow**: ustar plus the pax and GNU

@@ -35,10 +35,10 @@ export default defineConfig({
       // A ratchet, not an aspiration: set just below the measured floor so a
       // regression fails the build instead of quietly eroding coverage.
       thresholds: {
-        statements: 80,
-        branches: 75,
-        functions: 78,
-        lines: 80,
+        statements: 85,
+        branches: 77,
+        functions: 85,
+        lines: 88,
       },
     },
   },

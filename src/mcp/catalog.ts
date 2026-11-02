@@ -8,8 +8,10 @@
  * Advertise-vs-call is an important distinction. REA's inventory is much larger
  * than a chat turn can afford to describe — sending all 229 JSON Schemas to a
  * local 14B model consumes most of a 16k context before the user's question is
- * even asked. So the catalog supports *scopes*: a working set is advertised to
- * the model, while calls are still validated against the complete inventory.
+ * even asked. So the catalog supports *scopes*: a curated working set is
+ * advertised to the model and enforced by `AgentSession` at dispatch time
+ * (unless `agent.allowUnscopedTools` is explicitly enabled), while the catalog
+ * still indexes the complete inventory for UI discovery and scope switching.
  */
 
 import type { McpToolDefinition } from "./types.js";
