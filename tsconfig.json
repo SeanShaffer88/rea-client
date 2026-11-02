@@ -21,5 +21,8 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  // These exercise the browser renderer and need the DOM lib; they are
+  // typechecked by desktop/ui/tsconfig.json instead.
+  "exclude": ["test/unit/uiApi.test.ts", "test/unit/uiApp.test.tsx"]
 }

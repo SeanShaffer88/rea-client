@@ -103,7 +103,7 @@ export default function App() {
       if (seenEvents.current.size > 1000) seenEvents.current.delete(Math.min(...seenEvents.current));
       setEvents((previous) => [...previous, event].slice(-300));
       dispatch({ type: 'event', event });
-      if (event.method === 'engine.disconnected') { setConnected(false); setError(String(event.params.message)); }
+      if (event.method === 'engine.disconnected') { setConnected(false); setError(String(event.params.message)); dispatch({ type: 'interrupt', error: 'The REA engine stopped before this turn finished. Reconnect to continue.' }); }
     }, setConnected);
     return () => controller.abort();
   }, [boot]);

@@ -49,7 +49,7 @@ Node 22 and Node 24:
 | OpenAI-compatible streaming client (SSE, chunk splitting, UTF-8 boundaries, idle timeouts, aborts, non-streamed JSON) | **Tested** over a real TCP socket |
 | CLI exit codes, `--json` output, stream separation | **Tested** by spawning the built CLI as a subprocess |
 | Persistent JSON-RPC 2.0 stdio bridge (`rea-client serve`) | **Unit-tested** in-process and **integration-tested** as a real subprocess |
-| Electron + React desktop workspace (gateway, streaming chat, catalog, evidence, diagnostics, settings) | **Built, typechecked, and exercised** against the live gateway and real REA server in a DOM run; unit-tested gateway/bridge/reducer. Native window not launched in the build sandbox — see [Validation status](docs/desktop.md#validation-status) |
+| Electron + React desktop workspace (gateway, streaming chat, catalog, evidence, diagnostics, settings) | **Built and exercised** against the live gateway and real REA server, including a streamed turn with a real tool call through the rendered UI. Unit-tested supervisor, gateway, API client, reducer, Electron trust rules, and a jsdom App suite. Native window not launched in the build sandbox — see [Validation status](docs/desktop.md#validation-status) |
 | `doctor` verdicts (Node semver range, policy, workspace, MCP, providers, authenticated `/models`) | **Tested** in-process and against the live server |
 | Vendor manifest + offline verification | **Verified** — installed tree matches the published tarball on Linux and Windows (2398 files) |
 | Windows path, UNC air-gap policy, and `file://` canonicalization | **Tested** on both Linux (`path.win32`) and Windows (`windows-latest`) |

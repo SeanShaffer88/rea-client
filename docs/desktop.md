@@ -136,8 +136,26 @@ real ELF target (`/usr/bin/ls`):
   detail, diagnostics (5/6 checks passing; local model absent), settings,
   evidence empty state, and the close-target dialog all rendered with **no
   console or page errors**.
+- A local model was simulated with the repository's own
+  `FakeModelServer` (a real HTTP SSE server, not a stub) to drive the built UI
+  end to end: the composer enabled, a question streamed, a real
+  `binary_session` tool call reached the live REA server, the answer rendered as
+  Markdown, the turn footer reported "Investigation complete · 2 steps",
+  evidence gained that observation, and Diagnostics flipped the model check to
+  Passed — with no console or page errors.
 - `npm run typecheck`, `npm run typecheck:desktop`, all unit tests, and the
   coverage gate pass.
+
+Automated coverage for the desktop tier:
+
+| Layer | Test |
+| --- | --- |
+| Engine supervisor | `test/unit/engineBridge.test.ts` (spawns a fixture CLI), `test/integration/gatewayBridge.test.ts` |
+| Gateway security | `test/unit/gateway.test.ts` — host/origin/token/allowlist, uploads, traversal and symlink escape, preview token |
+| Electron trust rules | `test/unit/desktopSecurity.test.ts` — navigation/IPC origins and locked-down `webPreferences` |
+| Streaming UI state | `test/unit/desktopState.test.ts` — deltas, tool activity, completion, interruption |
+| API client | `test/unit/uiApi.test.ts` — 401 re-bootstrap, upload contract, error surfacing |
+| Rendered App | `test/unit/uiApp.test.tsx` (jsdom) — boot, catalog, diagnostics, target open, overview failure, retry |
 
 Not verified here, and not claimed:
 

@@ -45,4 +45,15 @@ describe("chatReducer", () => {
 
     expect(chatReducer(state, { type: "reset" })).toEqual(initialChat);
   });
+
+  it("interrupts an in-flight turn when the engine disconnects", () => {
+    let state = chatReducer(initialChat, { type: "ask", id: "req-1", question: "Q", time: new Date(0).toISOString() });
+    state = chatReducer(state, { type: "event", event: event(1, "assistant_delta", { text: "half an ans" }) });
+    state = chatReducer(state, { type: "interrupt", error: "The REA engine stopped." });
+    expect(state.running).toBe(false);
+    expect(state.messages[1]).toMatchObject({ content: "half an ans", streaming: false, reason: "failed", error: "The REA engine stopped." });
+
+    // An interrupt with no active turn is a no-op rather than a state reset.
+    expect(chatReducer(initialChat, { type: "interrupt", error: "ignored" })).toEqual(initialChat);
+  });
 });

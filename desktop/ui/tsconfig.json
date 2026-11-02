@@ -24,6 +24,14 @@
   "include": [
     "./**/*.ts",
     "./**/*.tsx",
-    "../../src/desktop/protocol.ts"
+    "../../src/desktop/protocol.ts",
+    "../../src/agent/events.ts",
+    "../../src/config.ts",
+    "../../src/doctor.ts",
+    "../../src/mcp/types.ts",
+    "../../src/llm/types.ts",
+    "../../test/unit/uiApi.test.ts",
+    "../../test/unit/uiApp.test.tsx",
+    "../../test/unit/desktopState.test.ts"
   ]
 }

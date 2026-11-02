@@ -22,6 +22,7 @@ export type ChatAction =
   | { type: "event"; event: DesktopEvent }
   | { type: "complete"; id: string; content: string; reason: AgentDoneReason; error?: string; iterations: number }
   | { type: "fail"; id: string; error: string }
+  | { type: "interrupt"; error: string }
   | { type: "reset" };
 
 export const initialChat: ChatState = { messages: [], running: false, requestId: null };
@@ -34,6 +35,18 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       { id: `${action.id}:answer`, role: "assistant", content: "", streaming: true, activities: [], time: action.time },
     ],
   };
+  if (action.type === "interrupt") {
+    if (!state.running) return state;
+    return {
+      ...state,
+      running: false,
+      messages: state.messages.map((message) =>
+        message.id === `${state.requestId}:answer`
+          ? { ...message, streaming: false, reason: "failed" as const, error: action.error }
+          : message,
+      ),
+    };
+  }
   if (action.type === "fail" || action.type === "complete") {
     if (state.requestId !== action.id) return state;
     return { ...state, running: false, messages: state.messages.map((message) => {
