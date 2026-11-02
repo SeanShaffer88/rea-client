@@ -119,6 +119,7 @@ function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ 
     }),
     "target.close": () => ({ body: { result: { ok: true, session: null } } }),
     "agent.ask": () => ({ body: { result: { content: "Done.", reason: "final_answer", iterations: 1, toolCallsExecuted: 0, usage: null, transcriptLength: 3 } } }),
+    "agent.transcript": () => ({ body: { result: { messages: [] } } }),
   };
 
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -219,6 +220,28 @@ describe("App", () => {
     expect(document.querySelector(".overview-failure h3")?.textContent).toBe("Target opened, but no overview was available.");
     expect(document.querySelector(".overview-failure .code-panel")?.textContent).toContain("provider_unavailable");
     expect(document.querySelector(".overview-content .untrusted-note")).toBeNull();
+  });
+
+  it("restores a conversation the engine already holds", async () => {
+    installFetch({
+      "agent.transcript": () => ({
+        body: {
+          result: {
+            messages: [
+              { role: "system", content: "You are REA." },
+              { role: "user", content: "What is open?" },
+              { role: "assistant", content: "Nothing yet." },
+            ],
+          },
+        },
+      }),
+    });
+    await render();
+    await waitFor("restored messages", () => document.querySelectorAll(".chat-message").length === 2);
+    expect(document.querySelector(".chat-message.message-user")?.textContent).toContain("What is open?");
+    expect(document.querySelectorAll(".chat-message.message-assistant")[0]?.textContent).toContain("Nothing yet.");
+    expect(document.querySelector(".toast")?.textContent).toContain("Previous conversation restored");
+    expect(document.querySelector(".message-footer")).toBeNull();
   });
 
   it("disables the composer when the local model fails diagnostics", async () => {

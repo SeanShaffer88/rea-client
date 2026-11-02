@@ -11,8 +11,8 @@ import {
 } from 'lucide-react';
 import { bootstrap, readStored, rpc, store, subscribeEvents, uploadBinary } from './api';
 import { Badge, Button, CodePanel, CopyButton, EmptyState, ErrorNotice, Modal, ToolActivityView, fileName, formatBytes } from './components';
-import { chatReducer, initialChat, type Message } from './state';
-import type { AskSnapshot, Bootstrap, CatalogSnapshot, DesktopEvent, DesktopSession, DoctorSnapshot, EngineStatus, TargetSnapshot, ToolDetail } from '../../src/desktop/protocol';
+import { chatReducer, initialChat, messagesFromTranscript, type Message } from './state';
+import type { AskSnapshot, Bootstrap, CatalogSnapshot, DesktopEvent, DesktopSession, DoctorSnapshot, EngineStatus, TargetSnapshot, ToolDetail, TranscriptSnapshot } from '../../src/desktop/protocol';
 import type { ToolScopeName } from '../../src/config';
 
 type Page = 'workspace' | 'tools' | 'evidence' | 'diagnostics' | 'settings';
@@ -83,6 +83,13 @@ export default function App() {
       const [tools, target] = await Promise.all([rpc<CatalogSnapshot>('tools.list', { includeDetails: true }), rpc<TargetSnapshot>('target.session')]);
       const status = await rpc<EngineStatus>('engine.ping');
       setCatalog(tools); setSession(target.session); setEngine(status); setConnected(true);
+      // A reload keeps the engine alive; restore what was already discussed.
+      const transcript = await rpc<TranscriptSnapshot>('agent.transcript').catch(() => null);
+      const restored = transcript ? messagesFromTranscript(transcript.messages) : [];
+      if (restored.length > 0) {
+        dispatch({ type: 'hydrate', messages: restored });
+        setToast('Previous conversation restored from the engine');
+      }
     } catch (cause) {
       const message = (cause as Error).message;
       setBootError(message);
@@ -117,7 +124,7 @@ export default function App() {
   }, []);
   useEffect(() => { if (boot && connected && !doctor && !checking && !doctorRequested.current) void runDoctor(); }, [boot, connected, doctor, checking, runDoctor]);
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 3500); return () => clearTimeout(timer); }, [toast]);
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [chat.messages]);
+  useEffect(() => { const end = chatEnd.current; if (typeof end?.scrollIntoView === 'function') end.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [chat.messages]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); if (!chat.running) setOpenDialog(true); }
@@ -265,7 +272,7 @@ export default function App() {
 function InfoIcon() { return <CircleHelp size={16} />; }
 function TerminalIcon() { return <SquareTerminal size={20} />; }
 function ChatMessage({ message }: { message: Message }) {
-  return <article className={`chat-message message-${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <Braces size={18} /> : <span>L</span>}</div><div className="message-body"><div className="message-label"><strong>{message.role === 'assistant' ? 'REA assistant' : 'You'}</strong><span>{new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{message.role === 'assistant' && <Badge><Cpu size={10} />Local</Badge>}</div>{message.activities.length > 0 && <div className="message-activities"><div className="field-caption">INVESTIGATION · {message.activities.length} TOOL {message.activities.length === 1 ? 'CALL' : 'CALLS'}</div>{message.activities.map((activity) => <ToolActivityView key={activity.id} activity={activity} />)}</div>}{message.content ? <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children }) => <span className="disabled-link" title="External navigation is disabled in this local workspace">{children}</span>, img: ({ alt }) => <span>[Image omitted: {alt ?? 'target content'}]</span> }}>{message.content}</ReactMarkdown></div> : message.streaming && !message.activities.some((activity) => !activity.finish) ? <div className="thinking"><span /><span /><span /><span className="thinking-label">Thinking through your question</span></div> : null}{message.streaming && message.content && <span className="streaming-cursor" />}{message.error && <ErrorNotice>{message.error}</ErrorNotice>}{!message.streaming && message.reason && <div className="message-footer"><span>{message.reason === 'cancelled' ? 'Stopped by you' : message.reason === 'max_iterations' ? 'Iteration limit reached · partial answer' : message.reason === 'failed' ? 'Turn failed' : 'Investigation complete'}{message.iterations !== undefined && ` · ${message.iterations} ${message.iterations === 1 ? 'step' : 'steps'}`}</span><CopyButton text={message.content} label="Copy answer" /></div>}</div></article>;
+  return <article className={`chat-message message-${message.role}`}><div className="message-avatar">{message.role === 'assistant' ? <Braces size={18} /> : <span>L</span>}</div><div className="message-body"><div className="message-label"><strong>{message.role === 'assistant' ? 'REA assistant' : 'You'}</strong>{message.time && <span>{new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}{message.role === 'assistant' && <Badge><Cpu size={10} />Local</Badge>}</div>{message.activities.length > 0 && <div className="message-activities"><div className="field-caption">INVESTIGATION · {message.activities.length} TOOL {message.activities.length === 1 ? 'CALL' : 'CALLS'}</div>{message.activities.map((activity) => <ToolActivityView key={activity.id} activity={activity} />)}</div>}{message.content ? <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children }) => <span className="disabled-link" title="External navigation is disabled in this local workspace">{children}</span>, img: ({ alt }) => <span>[Image omitted: {alt ?? 'target content'}]</span> }}>{message.content}</ReactMarkdown></div> : message.streaming && !message.activities.some((activity) => !activity.finish) ? <div className="thinking"><span /><span /><span /><span className="thinking-label">Thinking through your question</span></div> : null}{message.streaming && message.content && <span className="streaming-cursor" />}{message.error && <ErrorNotice>{message.error}</ErrorNotice>}{!message.streaming && message.reason && <div className="message-footer"><span>{message.reason === 'cancelled' ? 'Stopped by you' : message.reason === 'max_iterations' ? 'Iteration limit reached · partial answer' : message.reason === 'failed' ? 'Turn failed' : 'Investigation complete'}{message.iterations !== undefined && ` · ${message.iterations} ${message.iterations === 1 ? 'step' : 'steps'}`}</span><CopyButton text={message.content} label="Copy answer" /></div>}</div></article>;
 }
 function SchemaProperties({ schema }: { schema: Record<string, unknown> }) {
   const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;

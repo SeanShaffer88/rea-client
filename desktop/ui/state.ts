@@ -23,11 +23,41 @@ export type ChatAction =
   | { type: "complete"; id: string; content: string; reason: AgentDoneReason; error?: string; iterations: number }
   | { type: "fail"; id: string; error: string }
   | { type: "interrupt"; error: string }
+  | { type: "hydrate"; messages: Message[] }
   | { type: "reset" };
 
 export const initialChat: ChatState = { messages: [], running: false, requestId: null };
+
+/**
+ * Rebuilds the visible conversation from the engine's transcript after a reload.
+ * System and tool messages are engine plumbing, not something the user wrote or
+ * read, so they are dropped; tool activity itself is not replayed because the
+ * engine keeps the projection, not our per-call timing.
+ */
+export function messagesFromTranscript(
+  transcript: ReadonlyArray<{ role: string; content: string | null }>,
+): Message[] {
+  const messages: Message[] = [];
+  for (const entry of transcript) {
+    if (entry.role !== "user" && entry.role !== "assistant") continue;
+    const content = entry.content ?? "";
+    if (entry.role === "assistant" && content.trim() === "") continue;
+    messages.push({
+      id: `restored-${messages.length}`,
+      role: entry.role,
+      content,
+      activities: [],
+      time: "",
+    });
+  }
+  return messages;
+}
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   if (action.type === "reset") return initialChat;
+  if (action.type === "hydrate") {
+    if (state.running || action.messages.length === 0) return state;
+    return { ...state, messages: action.messages };
+  }
   if (action.type === "ask") return {
     running: true, requestId: action.id,
     messages: [...state.messages,

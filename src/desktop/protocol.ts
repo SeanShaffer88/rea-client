@@ -33,6 +33,10 @@ export interface TargetSnapshot {
   overviewError?: string;
   session: DesktopSession | null;
 }
+export interface TranscriptSnapshot {
+  messages: Array<{ role: string; content: string | null }>;
+  estimatedTokens?: number;
+}
 export interface AskSnapshot {
   content: string;
   reason: AgentDoneReason;

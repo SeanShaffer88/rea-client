@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatReducer, initialChat } from "../../desktop/ui/state.js";
+import { chatReducer, initialChat, messagesFromTranscript } from "../../desktop/ui/state.js";
 import type { DesktopEvent } from "../../src/desktop/protocol.js";
 
 function event(id: number, type: string, data: Record<string, unknown>): DesktopEvent {
@@ -55,5 +55,26 @@ describe("chatReducer", () => {
 
     // An interrupt with no active turn is a no-op rather than a state reset.
     expect(chatReducer(initialChat, { type: "interrupt", error: "ignored" })).toEqual(initialChat);
+  });
+
+  it("rebuilds the visible conversation from the engine transcript", () => {
+    const restored = messagesFromTranscript([
+      { role: "system", content: "You are REA." },
+      { role: "user", content: "What is open?" },
+      { role: "assistant", content: null },
+      { role: "tool", content: "observation", tool_call_id: "c1" },
+      { role: "assistant", content: "A binary." },
+      { role: "assistant", content: "   " },
+    ] as Array<{ role: string; content: string | null }>);
+    expect(restored.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(restored[1]?.content).toBe("A binary.");
+    expect(restored[0]?.time).toBe("");
+
+    const hydrated = chatReducer(initialChat, { type: "hydrate", messages: restored });
+    expect(hydrated.messages).toHaveLength(2);
+    // Hydration must never clobber an in-flight turn or clear an empty history.
+    const running = chatReducer(initialChat, { type: "ask", id: "req-1", question: "Q", time: "" });
+    expect(chatReducer(running, { type: "hydrate", messages: restored })).toBe(running);
+    expect(chatReducer(initialChat, { type: "hydrate", messages: [] })).toBe(initialChat);
   });
 });

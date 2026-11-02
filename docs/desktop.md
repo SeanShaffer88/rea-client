@@ -70,7 +70,9 @@ does not touch a binary or a model.
 
 - **Workspace** — open a target by path or (browser) upload, read the format,
   architecture, SHA-256 and provider summary, start a conversation, watch tool
-  calls stream in, stop a turn, switch scope, close the target.
+  calls stream in, stop a turn, switch scope, close the target. Reloading the
+  page re-attaches to the running engine and restores the conversation from
+  `agent.transcript` instead of starting over.
 - **Tool catalog** — the live 229-tool inventory with family filters, scope
   indicators, and lazily loaded JSON schemas (`tools.describe`). A tool can
   prefill a question; it cannot be invoked directly from the catalog.
@@ -118,6 +120,9 @@ the field keep the old behaviour.
   the 3.5 MB of full schemas.
 - `tools.describe { name }` — full live schema and scope membership for one
   tool, so the catalog stays lazy.
+- `agent.transcript` is used to rehydrate the visible conversation after a
+  reload; system and tool messages are dropped, and no transcript content is
+  written to browser storage.
 - `target.probe` now distinguishes an opened target from an unavailable
   overview: `{ ok: true, overview: null, overviewError: "..." }`. An error string
   is never presented as analysis output.
