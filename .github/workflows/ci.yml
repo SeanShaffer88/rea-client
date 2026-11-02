@@ -47,6 +47,10 @@ jobs:
       # `npm ci` fails if package-lock.json disagrees with package.json, which
       # keeps the committed lockfile honest on every PR.
       - name: Install dependencies
+        # Electron's browser binary is not needed for typechecking or building
+        # the shell, and downloading it would add a network dependency to CI.
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: npm ci
 
       - name: Typecheck
@@ -57,6 +61,18 @@ jobs:
       # missing, so this ordering is enforced rather than assumed.
       - name: Build
         run: npm run build
+
+      # The React UI resolves with bundler semantics, while the Electron main
+      # process resolves NodeNext against the freshly built dist/ declarations.
+      # Both are checked explicitly; neither is covered by the engine tsconfig.
+      - name: Typecheck desktop
+        run: npm run typecheck:desktop
+
+      # Compiles the renderer to dist-desktop and the main/preload to
+      # dist-electron. This proves the workspace builds on every supported OS;
+      # launching the native window is not possible on a headless runner.
+      - name: Build desktop
+        run: npm run build:ui && npm run build:electron
 
       # Guards the dependency itself: if the installed rea-agents tree differs
       # from the reviewed one -- a post-install script, a partial upgrade, a

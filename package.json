@@ -27,21 +27,41 @@
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:all": "vitest run",
-    "check": "npm run typecheck && npm run test:all",
+    "check": "npm run typecheck && npm run typecheck:desktop && npm run test:all",
     "dev": "tsx src/cli.ts",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8",
     "advisories": "node dist/cli.js vendor advisories zod --advisories vendor/advisories/zod.ghsa.json --accept vendor/advisories/accepted.json",
-    "advisories:refresh": "node scripts/refresh-advisories.mjs zod vendor/advisories/zod.ghsa.json"
+    "advisories:refresh": "node scripts/refresh-advisories.mjs zod vendor/advisories/zod.ghsa.json",
+    "build:ui": "vite build",
+    "build:electron": "tsc -p desktop/tsconfig.json",
+    "build:desktop": "npm run build && npm run build:ui && npm run build:electron",
+    "typecheck:desktop": "tsc -p desktop/ui/tsconfig.json && tsc -p desktop/tsconfig.json --noEmit",
+    "desktop": "electron dist-electron/main.js",
+    "desktop:web": "node dist/desktop/server.js",
+    "desktop:preview": "node dist/desktop/server.js --host 0.0.0.0 --preview --port 5173"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.4.0"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
     "@types/node": "26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
     "@vitest/coverage-v8": "^5.0.5",
+    "electron": "^45.2.1",
+    "jsdom": "^30.1.3",
+    "lucide-react": "^1.66.0",
     "rea-agents": "6.8.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
+    "vite": "^8.3.5",
     "vitest": "5.0.5"
   }
 }

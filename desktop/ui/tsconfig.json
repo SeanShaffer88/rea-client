@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "vite/client",
+      "node"
+    ]
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx",
+    "../../src/desktop/protocol.ts",
+    "../../src/agent/events.ts",
+    "../../src/config.ts",
+    "../../src/doctor.ts",
+    "../../src/mcp/types.ts",
+    "../../src/llm/types.ts",
+    "../../test/unit/uiApi.test.ts",
+    "../../test/unit/uiApp.test.tsx",
+    "../../test/unit/desktopState.test.ts"
+  ]
+}

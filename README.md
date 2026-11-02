@@ -27,8 +27,10 @@ user question
                           Hopper, JEB, …)
 ```
 
-The engine is transport-agnostic, so a native shell (Rust/egui, Slint) or the
-bundled headless CLI can drive the same object graph.
+The engine is transport-agnostic, so the bundled headless CLI, an Electron
+window, or any other shell can drive the same object graph. This repository now
+ships an Electron + React **desktop workspace** on top of the engine, plus a
+browser preview of the same UI.
 
 ## Status — read this first
 
@@ -47,18 +49,20 @@ Node 22 and Node 24:
 | OpenAI-compatible streaming client (SSE, chunk splitting, UTF-8 boundaries, idle timeouts, aborts, non-streamed JSON) | **Tested** over a real TCP socket |
 | CLI exit codes, `--json` output, stream separation | **Tested** by spawning the built CLI as a subprocess |
 | Persistent JSON-RPC 2.0 stdio bridge (`rea-client serve`) | **Unit-tested** in-process and **integration-tested** as a real subprocess |
+| Electron + React desktop workspace (gateway, streaming chat, catalog, evidence, diagnostics, settings) | **Built and exercised** against the live gateway and real REA server, including a streamed turn with a real tool call through the rendered UI. Unit-tested supervisor, gateway, API client, reducer, Electron trust rules, and a jsdom App suite. Native window not launched in the build sandbox — see [Validation status](docs/desktop.md#validation-status) |
 | `doctor` verdicts (Node semver range, policy, workspace, MCP, providers, authenticated `/models`) | **Tested** in-process and against the live server |
 | Vendor manifest + offline verification | **Verified** — installed tree matches the published tarball on Linux and Windows (2398 files) |
 | Windows path, UNC air-gap policy, and `file://` canonicalization | **Tested** on both Linux (`path.win32`) and Windows (`windows-latest`) |
-| Rust/egui shell, Job Object supervisor, model/Ghidra installer | **Not built** — see [Scope](#scope) |
+| Native installers, Job Object supervisor, bundled model/Ghidra | **Not built** — see [Scope](#scope) |
 
 The model client is exercised against a real HTTP server speaking the OpenAI
 `/v1/chat/completions` protocol, though CI does not bundle a live `llama-server`
 binary or GGUF weights.
 
-Coverage (v8, `npm run test:coverage`): **90% statements, 92% lines, 79%
-branches**. Thresholds in `vitest.config.ts` are a ratchet set just below that
-floor, so a regression fails CI.
+Coverage (v8, `npm run test:coverage`): **88% statements, 91% lines, 78%
+branches**, including the desktop bridge and gateway. Thresholds in
+`vitest.config.ts` are a ratchet set just below that floor, so a regression
+fails CI.
 
 ## What changed from the original blueprint
 
@@ -97,6 +101,12 @@ node dist/cli.js ask "Explain the main entry point" --open /usr/bin/ls
 
 # Persistent JSON-RPC 2.0 bridge over stdin/stdout for a native desktop shell
 node dist/cli.js serve
+
+# Desktop workspace
+npm run build:desktop
+npm run desktop           # native Electron window
+npm run desktop:web       # browser UI on 127.0.0.1:5173
+npm run desktop:preview   # browser UI on 0.0.0.0:5173 (explicit opt-in)
 ```
 
 `DEFAULT_CONFIG` automatically resolves `vendor/rea-agents/scripts/rea.mjs` (for
@@ -132,6 +142,31 @@ Windows Job Object) and exchange `\n`-delimited JSON-RPC 2.0 messages over
 
 Incoming requests are dispatched concurrently, so `agent.cancel` or
 `engine.shutdown` aborts an in-flight `agent.ask` turn immediately.
+
+## Desktop workspace
+
+`npm run build:desktop` builds the engine, the React UI (`dist-desktop`), and
+the Electron main/preload code (`dist-electron`). Two runtimes share the same
+UI and the same supervised `rea-client serve` child process:
+
+- `npm run desktop` opens an Electron window with a loopback gateway on a
+  random port and a native file picker.
+- `npm run desktop:web` serves the same UI on `127.0.0.1:5173`; adding
+  `desktop:preview` binds `0.0.0.0` only when `--preview` is passed. Set
+  `REA_PREVIEW_TOKEN` when a preview URL can be shared; without it the preview
+  is open to anyone who can reach the host.
+
+The workspace opens binaries by path or (browser only) upload, streams agent
+deltas and tool calls over authenticated SSE, exposes the live 229-tool catalog
+with lazily loaded schemas, shows projected evidence and evidence IDs, runs
+diagnostics with remediation, and exports a local JSON report. The renderer has
+no Node, filesystem, or arbitrary IPC access: Electron runs with sandbox and
+context isolation, the preload exposes exactly one file-dialog method, and all
+state changes pass an allowlisted, token-authenticated HTTP gateway.
+
+Start with [`docs/desktop.md`](docs/desktop.md) for the architecture, security
+boundaries, validation status, and the honest list of what is not verified
+(the native window has not been launched here, and no live model turn was run).
 
 ## Library use
 
@@ -227,13 +262,17 @@ See [docs/supply-chain.md](docs/supply-chain.md).
 
 ## Scope
 
-Built here: the engine, its tests, and the headless CLI.
+Built here: the engine, its tests, the headless CLI, and an Electron/React
+desktop workspace (shared with a browser preview) that drives the real bridge.
 
-Not built here: the Rust/egui desktop shell, Windows Job Object supervision,
-Ghidra/JRE bundling, model distribution, installer generation. This sandbox has
-no Rust toolchain and no access to crates.io, so shipping a GUI half here would
-mean untested code. The engine's public surface (events, callbacks, config) is
-the integration point those tiers should consume.
+Not built here: native installers, Windows Job Object supervision, bundled
+Ghidra/JRE or model assets, and macOS/Linux packaging. The Electron main process
+is typechecked and compiled, but this build sandbox has no display, no Electron
+binary, and no GTK/NSS libraries, so the native window could not be launched
+here; that limitation is recorded in
+[`docs/desktop.md`](docs/desktop.md#validation-status) rather than papered over.
+The engine's public surface (events, callbacks, config) remains the integration
+point for any other shell.
 
 ## Development
 
@@ -244,6 +283,8 @@ npm run build           # required before the CLI integration tests
 npm run test:integration  # real rea-agents MCP server + real HTTP model server
 npm run test:coverage   # both projects with v8 coverage and thresholds
 npm run check           # typecheck + both test projects
+npm run build:desktop   # engine + React UI + Electron shell
+npm run typecheck:desktop  # UI (bundler resolution) + Electron (NodeNext)
 ```
 
 Integration tests skip automatically when `rea-agents` is not installed **or**

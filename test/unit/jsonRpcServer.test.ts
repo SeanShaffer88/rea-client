@@ -393,3 +393,93 @@ describe("EngineRpcServer — lifecycle, target management, and stateful agent t
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("EngineRpcServer — target probe reporting", () => {
+  it("keeps a failed overview distinct from a successful target open", async () => {
+    const connection = new FakeConnection(BRIDGE_TOOLS, (name) => {
+      if (name === "open_binary") {
+        return { content: [{ type: "text", text: "opened C:\\targets\\provider.exe" }] };
+      }
+      if (name === "binary_overview") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: '{"error":{"code":"provider_unavailable","message":"No analysis provider is available."}}',
+            },
+          ],
+        };
+      }
+      if (name === "binary_session") {
+        return {
+          structuredContent: {
+            result: {
+              open: true,
+              path: "C:\\targets\\provider.exe",
+              format: "pe",
+              packageVersion: "6.8.0",
+            },
+          },
+        };
+      }
+      return { content: [{ type: "text", text: `ok:${name}` }] };
+    });
+    const harness = new RpcHarness({ connection });
+
+    try {
+      const response = (await harness.call("probe", "target.probe", {
+        path: "C:\\targets\\provider.exe",
+      })) as JsonRpcSuccessResponse;
+      const result = response.result as { ok: boolean; overview: string | null; overviewError?: string };
+      expect(result.ok).toBe(true);
+      expect(result.overview).toBeNull();
+      expect(result.overviewError).toContain("provider_unavailable");
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+describe("EngineRpcServer — desktop event correlation", () => {
+  it("tags streamed agent events with the caller's client request id", async () => {
+    const harness = new RpcHarness({ chat: new ScriptedChat([textTurn("Streamed answer.")]) });
+
+    try {
+      const response = (await harness.call("ask-1", "agent.ask", {
+        question: "What does it do?",
+        clientRequestId: "ui-abc",
+      })) as JsonRpcSuccessResponse;
+      expect(response.result).toMatchObject({ content: "Streamed answer." });
+      const tagged = harness.notifications.filter(
+        (notification) =>
+          notification.method === "agent.event" && notification.params["requestId"] === "ui-abc",
+      );
+      expect(tagged.length).toBeGreaterThan(0);
+      expect(
+        harness.notifications.some(
+          (notification) =>
+            notification.method === "agent.event" && notification.params["requestId"] === "ask-1",
+        ),
+      ).toBe(false);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("rejects a client request id that is not a bounded non-empty string", async () => {
+    const harness = new RpcHarness();
+
+    try {
+      for (const clientRequestId of ["", "x".repeat(129), 7]) {
+        const response = (await harness.call("ask-2", "agent.ask", {
+          question: "Hello",
+          clientRequestId,
+        })) as JsonRpcErrorResponse;
+        expect(response.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+});
