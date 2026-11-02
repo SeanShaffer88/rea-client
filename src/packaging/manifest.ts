@@ -127,7 +127,9 @@ export async function buildManifest(
       if (item === undefined) return;
 
       if (item.isSymlink) {
-        const linkTarget = await readlink(item.absolute);
+        // Normalize NTFS backslash reparse targets so a manifest recorded on
+        // Linux verifies identically on Windows and vice-versa.
+        const linkTarget = (await readlink(item.absolute)).replaceAll("\\", "/");
         files[index] = { path: item.path, sha256: sha256(linkTarget), size: 0, link: true };
       } else {
         const bytes = await readFile(item.absolute);
