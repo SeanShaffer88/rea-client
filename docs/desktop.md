@@ -175,6 +175,17 @@ Not verified here, and not claimed:
   conversation, streaming-tool-activity, stop, and evidence-population paths are
   covered by unit tests and reducer tests rather than a live model.
 
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `npm run desktop` fails with "Electron failed to install correctly" | The npm postinstall download was skipped or blocked. Run `node node_modules/electron/install.js`, or set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and use the browser preview instead. |
+| Electron exits immediately on Linux with a missing `libnss3.so` / `libgtk-3.so` | Install the distribution's Electron runtime dependencies (`libnss3`, `libgtk-3-0`, `libgbm1`, `libasound2`). This sandbox is exactly that situation. |
+| The page shows "Could not connect to the local workspace service." | `dist-desktop` is missing or the gateway is not running. Run `npm run build:desktop`, then `npm run desktop:web`. |
+| "This preview requires an access token" | The server was started with `REA_PREVIEW_TOKEN`; open the URL including `?access_token=…` as printed at startup. |
+| "Desktop assets not found. Run npm run build:desktop." | The gateway started before the UI was built; rebuild and restart. |
+| Diagnostics says the local model is unavailable | Start a loopback OpenAI-compatible server (for example `llama-server`) matching `llm.baseUrl` in the config, then press *Run diagnostics*. |
+
 ## Packaging notes (not implemented)
 
 `npm run desktop` runs from a source checkout. A distributable build still
