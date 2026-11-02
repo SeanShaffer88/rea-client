@@ -1,5 +1,7 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ConfigError, DEFAULT_CONFIG, parseConfig } from "../../src/config.js";
+import { DEFAULT_GUARD_LIMITS } from "../../src/agent/argumentGuard.js";
+import { ConfigError, DEFAULT_CONFIG, loadConfig, parseConfig } from "../../src/config.js";
 
 describe("parseConfig", () => {
   it("returns defaults for an empty object", () => {
@@ -101,5 +103,13 @@ describe("parseConfig", () => {
     expect(parseConfig({ agent: { allowUnscopedTools: true } }).agent.allowUnscopedTools).toBe(
       true,
     );
+  });
+
+  it("keeps config.example.json aligned with parseConfig and the zod guard limits", async () => {
+    const example = await loadConfig(resolve("config.example.json"));
+    expect(example.agent.maxArgumentArrayItems).toBe(DEFAULT_GUARD_LIMITS.maxArrayItems);
+    expect(example.agent.maxArgumentBytes).toBe(DEFAULT_GUARD_LIMITS.maxBytes);
+    expect(example.agent.allowUnscopedTools).toBe(false);
+    expect(example.policy.allowNonLoopback).toBe(false);
   });
 });

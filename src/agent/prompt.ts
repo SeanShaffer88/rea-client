@@ -75,6 +75,20 @@ export function buildSystemPrompt(context: PromptContext): string {
   } else {
     const details: string[] = [];
     if (session.targetPath !== undefined) details.push(`path: ${session.targetPath}`);
+    if (session.format !== undefined) details.push(`format: ${session.format}`);
+    if (session.architecture !== undefined) details.push(`architecture: ${session.architecture}`);
+    if (session.sha256 !== undefined) details.push(`sha256: ${session.sha256}`);
+    if (session.providerId !== undefined) {
+      const ver = session.providerVersion === undefined ? "" : ` (${session.providerVersion})`;
+      details.push(`provider: ${session.providerId}${ver}`);
+    } else if (session.providers.length > 0) {
+      const available = session.providers.filter((p) => p.available).map((p) => p.id);
+      details.push(
+        available.length > 0
+          ? `provider: none bound (available: ${available.join(", ")})`
+          : "provider: none bound (no deep-analysis provider available)",
+      );
+    }
     if (session.sessionKind !== undefined) details.push(`kind: ${session.sessionKind}`);
     if (session.packageVersion !== undefined) details.push(`REA ${session.packageVersion}`);
     parts.push(`Open target:\n${details.map((line) => `- ${line}`).join("\n")}`);

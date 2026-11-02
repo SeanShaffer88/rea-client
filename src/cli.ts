@@ -45,6 +45,7 @@ import {
   downloadTarball,
   readPackageIdentity,
 } from "./packaging/registry.js";
+import { EngineRpcServer } from "./bridge/JsonRpcServer.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const CLI_VERSION = "0.1.0";
@@ -62,6 +63,7 @@ Usage:
   rea-client tools  [--config <path>] [--json] [--family <id>] [--scope <name>]
   rea-client probe <binary> [--config <path>] [--json]
   rea-client ask "<question>" [--open <binary>] [--scope <name>] [--config <path>] [--json]
+  rea-client serve  [--config <path>]
   rea-client vendor manifest <dir> [--out <file>] [--registry <url>] [--json]
   rea-client vendor verify <dir> --manifest <file> [--json]
   rea-client vendor advisories [<package>] [--deny <severity>] [--advisories <file>] [--json]
@@ -191,6 +193,8 @@ async function main(argv: readonly string[]): Promise<number> {
       return commandProbe(config, positionals[1], values.json === true);
     case "ask":
       return commandAsk(config, positionals.slice(1), values.json === true, values.open, values.scope);
+    case "serve":
+      return commandServe(config);
     case "vendor":
       return commandVendor(positionals.slice(1), config, {
         json: values.json === true,
@@ -229,6 +233,34 @@ async function commandDoctor(
   }
   process.stdout.write(`\n${report.healthy ? "Ready." : "Not ready — resolve the failures above."}\n`);
   return report.healthy ? 0 : 1;
+}
+
+async function commandServe(config: ReaClientConfig): Promise<number> {
+  const server = new EngineRpcServer({
+    config,
+    input: process.stdin,
+    output: process.stdout,
+    version: CLI_VERSION,
+  });
+
+  const onSignal = (): void => {
+    void server.close();
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
+  try {
+    process.stdin.resume();
+    await server.run();
+    return 0;
+  } finally {
+    process.stdin.pause();
+    if ("unref" in process.stdin && typeof process.stdin.unref === "function") {
+      process.stdin.unref();
+    }
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
 }
 
 async function commandTools(

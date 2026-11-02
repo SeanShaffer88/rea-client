@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { AgentSession, groupIntoUnits, parseArguments } from "../../src/agent/AgentSession.js";
+import {
+  AgentSession,
+  createAgentSession,
+  groupIntoUnits,
+  parseArguments,
+} from "../../src/agent/AgentSession.js";
+import { buildSystemPrompt } from "../../src/agent/prompt.js";
 import type { AgentEvents } from "../../src/agent/events.js";
+import { DEFAULT_CONFIG } from "../../src/config.js";
 import { ToolCatalog } from "../../src/mcp/catalog.js";
 import type { McpCallToolResult } from "../../src/mcp/types.js";
 import type { ChatTransport } from "../../src/llm/types.js";
@@ -555,5 +562,69 @@ describe("AgentSession — scope boundary, extraTools, and context pruning", () 
     const result = await agent.ask("hello");
     expect(result.reason).toBe("failed");
     expect(result.error).toContain("connection reset by peer");
+  });
+
+  it("refreshes the system prompt automatically after open_binary and close_binary", async () => {
+    const sessionTools = [...TOOLS, tool("close_binary")];
+    const catalog = ToolCatalog.from(sessionTools);
+    const scope = catalog.resolveScope("custom", sessionTools.map((t) => t.name));
+
+    let isOpen = false;
+    const connection = new FakeConnection(sessionTools, (name, args) => {
+      if (name === "open_binary") {
+        isOpen = true;
+        return { content: [{ type: "text", text: `opened ${String(args["path"])}` }] };
+      }
+      if (name === "close_binary") {
+        isOpen = false;
+        return { content: [{ type: "text", text: "closed" }] };
+      }
+      if (name === "binary_session") {
+        return {
+          structuredContent: {
+            result: isOpen
+              ? {
+                  open: true,
+                  path: "C:\\targets\\sample.exe",
+                  format: "pe",
+                  architecture: "x86_64",
+                  sha256: "aa".repeat(32),
+                }
+              : { open: false },
+          },
+        };
+      }
+      return { content: [{ type: "text", text: "ok" }] };
+    });
+
+    const chat = new ScriptedChat([
+      toolCallTurn("open_binary", { path: "C:\\targets\\sample.exe" }),
+      textTurn("Opened sample.exe."),
+      toolCallTurn("close_binary", {}),
+      textTurn("Closed sample.exe."),
+    ]);
+
+    const agent = createAgentSession(DEFAULT_CONFIG, {
+      connection,
+      chat,
+      catalog,
+      scope,
+      systemPrompt: buildSystemPrompt({
+        catalog,
+        advertisedToolCount: scope.tools.length,
+        session: undefined,
+      }),
+    });
+
+    expect(agent.transcript()[0]?.content).toContain("Open target: none");
+
+    await agent.ask("Open C:\\targets\\sample.exe");
+    expect(agent.transcript()[0]?.content).toContain("path: C:\\targets\\sample.exe");
+    expect(agent.transcript()[0]?.content).toContain("format: pe");
+    // The follow-up turn within the first ask() already received the refreshed prompt!
+    expect(chat.requests[1]?.messages[0]?.content).toContain("path: C:\\targets\\sample.exe");
+
+    await agent.ask("Now close the target");
+    expect(agent.transcript()[0]?.content).toContain("Open target: none");
   });
 });
