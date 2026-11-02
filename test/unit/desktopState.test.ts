@@ -46,6 +46,25 @@ describe("chatReducer", () => {
     expect(chatReducer(state, { type: "reset" })).toEqual(initialChat);
   });
 
+  it("keeps the engine's failure explanation when a turn ends as failed", () => {
+    let state = chatReducer(initialChat, { type: "ask", id: "req-1", question: "Q", time: new Date(0).toISOString() });
+    state = chatReducer(state, {
+      type: "complete",
+      id: "req-1",
+      content: "",
+      reason: "failed",
+      error: "Could not reach the local model server at http://127.0.0.1:8080/v1/chat/completions: fetch failed",
+      iterations: 1,
+    });
+    expect(state.running).toBe(false);
+    expect(state.messages[1]).toMatchObject({
+      reason: "failed",
+      streaming: false,
+      content: "",
+    });
+    expect(state.messages[1]?.error).toContain("Could not reach the local model server");
+  });
+
   it("interrupts an in-flight turn when the engine disconnects", () => {
     let state = chatReducer(initialChat, { type: "ask", id: "req-1", question: "Q", time: new Date(0).toISOString() });
     state = chatReducer(state, { type: "event", event: event(1, "assistant_delta", { text: "half an ans" }) });
