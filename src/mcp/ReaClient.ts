@@ -13,6 +13,7 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import type { ReaServerConfig } from "../config.js";
+import { assertLoopbackUrl } from "../platform/net.js";
 import { Emitter } from "../util/emitter.js";
 import type { McpCallToolResult, McpServerVersion, McpToolDefinition } from "./types.js";
 
@@ -51,11 +52,14 @@ const STDERR_RING_CAPACITY = 500;
 export interface ReaClientOptions {
   /** Injected for tests; defaults to the SDK's stdio transport. */
   readonly clientFactory?: () => Client;
+  /** Explicit override for loopback policy on HTTP transport. */
+  readonly allowNonLoopback?: boolean;
 }
 
 export class ReaClient extends Emitter<ReaClientEvents> implements McpConnection {
   private readonly config: ReaServerConfig;
   private readonly clientFactory: () => Client;
+  private readonly allowNonLoopback: boolean | undefined;
   private client: Client | undefined;
   private transport: { close(): Promise<void> } | undefined;
   private currentState: ReaClientState = "idle";
@@ -65,6 +69,7 @@ export class ReaClient extends Emitter<ReaClientEvents> implements McpConnection
   public constructor(config: ReaServerConfig, options: ReaClientOptions = {}) {
     super();
     this.config = config;
+    this.allowNonLoopback = options.allowNonLoopback ?? config.allowNonLoopback;
     this.clientFactory = options.clientFactory ?? (() => new Client(
       { name: "rea-desktop", version: "0.1.0" },
       { capabilities: {} },
@@ -124,7 +129,10 @@ export class ReaClient extends Emitter<ReaClientEvents> implements McpConnection
 
   private buildTransport(): StdioClientTransport | StreamableHTTPClientTransport {
     if (this.config.transport === "http") {
-      const url = new URL(this.config.httpUrl);
+      const url = assertLoopbackUrl(this.config.httpUrl, {
+        allowNonLoopback: this.allowNonLoopback === true,
+        settingName: "rea.httpUrl",
+      });
       return new StreamableHTTPClientTransport(url);
     }
 
@@ -157,7 +165,9 @@ export class ReaClient extends Emitter<ReaClientEvents> implements McpConnection
   public async listTools(): Promise<readonly McpToolDefinition[]> {
     if (this.toolsCache !== undefined) return this.toolsCache;
     const client = this.requireClient();
-    const result = await client.listTools();
+    const result = await client.listTools(undefined, {
+      timeout: this.config.startupTimeoutSec * 1000,
+    });
     const tools = (result.tools ?? []) as unknown as McpToolDefinition[];
     this.toolsCache = [...tools];
     return this.toolsCache;

@@ -22,18 +22,22 @@
 
 import { pathToFileURL } from "node:url";
 import { win32 as pathWin32, posix as pathPosix } from "node:path";
+import { isLoopbackHostname } from "./net.js";
 
 export type PathPlatform = "windows" | "posix";
 
+export type TargetPathErrorCode =
+  | "empty"
+  | "invalid_character"
+  | "relative_path"
+  | "unsupported_url"
+  | "non_local_unc";
+
 export class TargetPathError extends Error {
   public override readonly name = "TargetPathError";
-  public readonly code:
-    | "empty"
-    | "invalid_character"
-    | "relative_path"
-    | "unsupported_url";
+  public readonly code: TargetPathErrorCode;
 
-  public constructor(code: TargetPathError["code"], message: string) {
+  public constructor(code: TargetPathErrorCode, message: string) {
     super(message);
     this.code = code;
   }
@@ -49,11 +53,19 @@ export interface CanonicalizeOptions {
   readonly resolveRelativeTo?: string;
   /** Separator style in the returned path. Defaults to the target platform's. */
   readonly style?: "native" | "forward";
+  /**
+   * When explicitly `false`, rejects remote UNC / network-share paths whose
+   * host is not loopback, preventing SMB/WebDAV egress in air-gapped mode.
+   */
+  readonly allowNonLoopback?: boolean;
 }
 
 const EXTENDED_PREFIX = /^\\\\[?.]\\/;
 const NT_OBJECT_PREFIX = /^\\\?\?\\/;
 const UNC_EXTENDED_PREFIX = /^\\\\[?.]\\UNC\\/i;
+const WIN32_DRIVE_RELATIVE = /^[a-zA-Z]:(?![\\/])/;
+const WIN32_ROOT_RELATIVE = /^\\(?!\\)/;
+const WIN32_BARE_UNC_HOST = /^\\\\[^\\]+\\?$/;
 
 /**
  * Strips Win32 extended-length / NT object prefixes.
@@ -171,9 +183,28 @@ export function canonicalizeTargetPath(
     // Windows accepts '/' everywhere; normalize early so drive-relative
     // detection and absolute checks see one form.
     value = value.replace(/\//g, "\\");
+
+    if (WIN32_DRIVE_RELATIVE.test(value)) {
+      throw new TargetPathError(
+        "relative_path",
+        `Drive-relative Windows path ${JSON.stringify(input)} depends on per-drive working directory. Supply a full path such as "C:\\\\...".`,
+      );
+    }
+
+    if (WIN32_BARE_UNC_HOST.test(value)) {
+      throw new TargetPathError(
+        "relative_path",
+        `UNC path ${JSON.stringify(input)} is missing a share name (expected "\\\\server\\share\\...").`,
+      );
+    }
   }
 
-  if (!pathImpl.isAbsolute(value)) {
+  const isTrulyAbsolute =
+    platform === "windows"
+      ? pathImpl.isAbsolute(value) && !WIN32_ROOT_RELATIVE.test(value)
+      : pathImpl.isAbsolute(value);
+
+  if (!isTrulyAbsolute) {
     const base = options.resolveRelativeTo;
     if (base === undefined) {
       throw new TargetPathError(
@@ -184,11 +215,28 @@ export function canonicalizeTargetPath(
     const normalizedBase = canonicalizeTargetPath(base, {
       platform,
       style: "native",
+      ...(options.allowNonLoopback === undefined
+        ? {}
+        : { allowNonLoopback: options.allowNonLoopback }),
     });
-    value = pathImpl.join(normalizedBase, value);
+    value =
+      platform === "windows" && WIN32_ROOT_RELATIVE.test(value)
+        ? pathWin32.resolve(normalizedBase, value)
+        : pathImpl.join(normalizedBase, value);
   }
 
   const normalized = pathImpl.normalize(value);
+
+  if (options.allowNonLoopback === false) {
+    const uncHost = extractRemoteHost(normalized, platform);
+    if (uncHost !== undefined && !isLoopbackHostname(uncHost)) {
+      throw new TargetPathError(
+        "non_local_unc",
+        `Target path ${JSON.stringify(input)} points at remote network host ${JSON.stringify(uncHost)}. ` +
+          `Copy the binary locally or set policy.allowNonLoopback to true if network shares are permitted.`,
+      );
+    }
+  }
 
   if (style === "forward") {
     return platform === "windows"
@@ -196,6 +244,19 @@ export function canonicalizeTargetPath(
       : normalized;
   }
   return normalized;
+}
+
+function extractRemoteHost(normalizedPath: string, platform: PathPlatform): string | undefined {
+  if (platform === "windows") {
+    const match = /^\\\\([^\\]+)\\/.exec(normalizedPath);
+    return match?.[1];
+  }
+  const match = /^\/\/([^/]+)\//.exec(normalizedPath);
+  return match?.[1];
+}
+
+function encodeWin32UrlPath(slashPath: string): string {
+  return encodeURI(slashPath).replace(/#/g, "%23").replace(/\?/g, "%3F");
 }
 
 /**
@@ -232,7 +293,11 @@ export function toFileUrl(input: string, platform: PathPlatform = "windows"): st
 
   if (canonical.startsWith("\\\\")) {
     // UNC: \\server\share\x  ->  file://server/share/x
-    return `file://${canonical.slice(2).replace(/\\/g, "/")}`;
+    const withoutPrefix = canonical.slice(2).replace(/\\/g, "/");
+    const slashIndex = withoutPrefix.indexOf("/");
+    const host = slashIndex === -1 ? withoutPrefix : withoutPrefix.slice(0, slashIndex);
+    const rest = slashIndex === -1 ? "" : withoutPrefix.slice(slashIndex);
+    return `file://${host}${encodeWin32UrlPath(rest)}`;
   }
-  return `file:///${canonical.replace(/\\/g, "/")}`;
+  return `file:///${encodeWin32UrlPath(canonical.replace(/\\/g, "/"))}`;
 }

@@ -64,6 +64,13 @@ export interface BuildManifestOptions {
 }
 
 const DEFAULT_IGNORE = [".bin", "node_modules", ".cache"];
+const HASH_CONCURRENCY = 24;
+
+interface DiscoveredEntry {
+  readonly absolute: string;
+  readonly path: string;
+  readonly isSymlink: boolean;
+}
 
 /**
  * Walks `root` and records every file.
@@ -77,11 +84,10 @@ export async function buildManifest(
   options: BuildManifestOptions = {},
 ): Promise<VendorManifest> {
   const ignore = new Set(options.ignore ?? DEFAULT_IGNORE);
-  const files: ManifestFile[] = [];
+  const discovered: DiscoveredEntry[] = [];
 
   async function walk(dir: string): Promise<void> {
     const entries = await readdir(dir, { withFileTypes: true });
-    // Sorted so traversal order cannot vary between runs or filesystems.
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
     for (const entry of entries) {
@@ -94,19 +100,11 @@ export async function buildManifest(
       }
 
       const path = relative(root, absolute).split(sep).join("/");
-
       if (entry.isSymbolicLink()) {
-        // Hashed by target string, not by the content it points at, so a
-        // retargeted link is reported as drift instead of being followed.
-        const linkTarget = await readlink(absolute);
-        files.push({ path, sha256: sha256(linkTarget), size: 0, link: true });
-        continue;
+        discovered.push({ absolute, path, isSymlink: true });
+      } else if (entry.isFile()) {
+        discovered.push({ absolute, path, isSymlink: false });
       }
-
-      if (!entry.isFile()) continue;
-
-      const bytes = await readFile(absolute);
-      files.push({ path, sha256: sha256(bytes), size: bytes.length });
     }
   }
 
@@ -116,6 +114,32 @@ export async function buildManifest(
   }
 
   await walk(root);
+  discovered.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+  const files = new Array<ManifestFile>(discovered.length);
+  let cursor = 0;
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      const item = discovered[index];
+      if (item === undefined) return;
+
+      if (item.isSymlink) {
+        // Normalize NTFS backslash reparse targets so a manifest recorded on
+        // Linux verifies identically on Windows and vice-versa.
+        const linkTarget = (await readlink(item.absolute)).replaceAll("\\", "/");
+        files[index] = { path: item.path, sha256: sha256(linkTarget), size: 0, link: true };
+      } else {
+        const bytes = await readFile(item.absolute);
+        files[index] = { path: item.path, sha256: sha256(bytes), size: bytes.length };
+      }
+    }
+  }
+
+  const workerCount = Math.min(HASH_CONCURRENCY, Math.max(1, discovered.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,

@@ -97,6 +97,19 @@ describe("readTarball — malformed input", () => {
   it("rejects an archive with no entries", () => {
     expect(() => readTarball(gzipSync(Buffer.alloc(1024)))).toThrow(/no entries/i);
   });
+
+  it("rejects truncated PAX and GNU extended headers", () => {
+    const paxInflated = gunzipSync(
+      buildTarball([{ path: LONG_PATH, content: "pax", forcePax: true }]),
+    );
+    // Truncate inside the 512-byte PAX extended header payload block.
+    expect(() => readTarball(gzipSync(paxInflated.subarray(0, 520)))).toThrow(/overruns the archive/i);
+
+    const gnuInflated = gunzipSync(
+      buildTarball([{ path: LONG_PATH, content: "gnu", gnuLongName: true }]),
+    );
+    expect(() => readTarball(gzipSync(gnuInflated.subarray(0, 520)))).toThrow(/overruns the archive/i);
+  });
 });
 
 describe("normalizeEntryPath", () => {

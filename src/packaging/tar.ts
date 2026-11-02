@@ -126,6 +126,9 @@ export function readTarball(gzipped: Buffer): TarEntry[] {
 
     // Metadata entries describe the *next* entry and carry no file content.
     if (typeflag === "x" || typeflag === "g") {
+      if (dataStart + size > archive.length) {
+        throw new TarError(`Tar extended header (${typeflag}) overruns the archive`);
+      }
       const body = archive.subarray(dataStart, dataStart + size);
       if (typeflag === "x") {
         const pax = parsePax(body);
@@ -140,6 +143,9 @@ export function readTarball(gzipped: Buffer): TarEntry[] {
     }
 
     if (typeflag === "L") {
+      if (dataStart + size > archive.length) {
+        throw new TarError("Tar GNU longname header overruns the archive");
+      }
       // GNU longname: the body is the next entry's path, NUL-terminated.
       pendingPath = cString(archive.subarray(dataStart, dataStart + size), 0, size);
       offset = dataStart + Math.ceil(size / BLOCK) * BLOCK;

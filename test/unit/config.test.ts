@@ -70,4 +70,36 @@ describe("parseConfig", () => {
   it("rejects a top-level array", () => {
     expect(() => parseConfig([])).toThrow(/expected an object/);
   });
+
+  it("rejects unknown keys across root and nested sections while allowing $schema", () => {
+    expect(() => parseConfig({ $schema: "./config.schema.json" })).not.toThrow();
+    expect(() => parseConfig({ extraTopLevel: true })).toThrow(/unknown configuration key/);
+    expect(() => parseConfig({ rea: { startupTimeoutMs: 5000 } })).toThrow(
+      /unknown configuration key/,
+    );
+    expect(() => parseConfig({ llm: { topP: 0.9 } })).toThrow(/unknown configuration key/);
+    expect(() => parseConfig({ agent: { bogus: 1 } })).toThrow(/unknown configuration key/);
+    expect(() => parseConfig({ policy: { allowRemote: true } })).toThrow(
+      /unknown configuration key/,
+    );
+  });
+
+  it("validates rea.httpUrl against the air-gap loopback policy", () => {
+    expect(() =>
+      parseConfig({ rea: { transport: "http", httpUrl: "http://10.0.0.9:8721/mcp" } }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      parseConfig({
+        rea: { transport: "http", httpUrl: "http://10.0.0.9:8721/mcp" },
+        policy: { allowNonLoopback: true },
+      }),
+    ).not.toThrow();
+  });
+
+  it("defaults agent.allowUnscopedTools to false and accepts boolean overrides", () => {
+    expect(parseConfig({}).agent.allowUnscopedTools).toBe(false);
+    expect(parseConfig({ agent: { allowUnscopedTools: true } }).agent.allowUnscopedTools).toBe(
+      true,
+    );
+  });
 });

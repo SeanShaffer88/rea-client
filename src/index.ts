@@ -11,6 +11,7 @@ export {
   ConfigError,
   loadConfig,
   parseConfig,
+  resolveDefaultReaEntry,
   type AgentConfig,
   type LlmConfig,
   type PolicyConfig,
@@ -34,6 +35,7 @@ export {
   toFileUrl,
   type CanonicalizeOptions,
   type PathPlatform,
+  type TargetPathErrorCode,
 } from "./platform/paths.js";
 
 export {
@@ -42,6 +44,7 @@ export {
   describeError,
   type McpConnection,
   type ReaClientEvents,
+  type ReaClientOptions,
   type ReaClientState,
 } from "./mcp/ReaClient.js";
 
@@ -83,7 +86,16 @@ export type {
   ProviderAvailability,
 } from "./mcp/types.js";
 
-export { AgentSession, createAgentSession, groupIntoUnits, parseArguments } from "./agent/AgentSession.js";
+export {
+  AgentSession,
+  createAgentSession,
+  groupIntoUnits,
+  parseArguments,
+  type AgentResult,
+  type AgentSessionOptions,
+  type AskOptions,
+  type ExtraToolHandler,
+} from "./agent/AgentSession.js";
 export { buildSystemPrompt, type PromptContext } from "./agent/prompt.js";
 export { previewOf, type AgentDoneReason, type AgentEvents } from "./agent/events.js";
 
@@ -107,7 +119,14 @@ export type {
   TokenUsage,
 } from "./llm/types.js";
 
-export { runDoctor, type CheckResult, type CheckStatus, type DoctorReport } from "./doctor.js";
+export {
+  checkNodeVersion,
+  runDoctor,
+  type CheckResult,
+  type CheckStatus,
+  type DoctorOptions,
+  type DoctorReport,
+} from "./doctor.js";
 
 // Packaging / supply chain
 export {

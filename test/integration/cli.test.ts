@@ -80,6 +80,28 @@ describe.skipIf(!hasBuild)("rea-client CLI", () => {
     expect(result.stdout).toContain("probe");
   });
 
+  it("prints version and exits 0 for --version", async () => {
+    const result = await run(["--version"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("0.1.0");
+  });
+
+  it("exits 2 without a stack trace on unknown flags, bad configs, or invalid --scope", async () => {
+    const unknownFlag = await run(["doctor", "--not-a-real-flag"]);
+    expect(unknownFlag.code).toBe(2);
+    expect(unknownFlag.stderr).not.toContain("    at ");
+
+    const badConfigPath = join(configDir, "bad-config.json");
+    writeFileSync(badConfigPath, JSON.stringify({ unknownField: 123 }), "utf8");
+    const badConfig = await run(["doctor", "--config", badConfigPath]);
+    expect(badConfig.code).toBe(2);
+    expect(badConfig.stderr).toContain("Configuration error");
+
+    const badScope = await run(["tools", "--scope", "nonsense", "--config", configPath]);
+    expect(badScope.code).toBe(2);
+    expect(badScope.stderr).toContain("--scope must be one of");
+  });
+
   it("prints usage and exits 2 when no command is given", async () => {
     const result = await run([]);
     expect(result.code).toBe(2);
@@ -170,11 +192,43 @@ describe.skipIf(!hasBuild)("rea-client CLI", () => {
     });
 
     it("probe opens a real binary and reports identity", async () => {
-      const result = await run(["probe", "/usr/bin/ls", "--config", configPath]);
-      expect(result.stdout).toContain("Format: elf");
-      expect(result.stdout).toContain("Arch: x86_64");
+      const targetBinary =
+        process.platform === "win32"
+          ? join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "whoami.exe")
+          : process.platform === "darwin"
+            ? "/bin/ls"
+            : "/usr/bin/ls";
+      const expectedFormat =
+        process.platform === "win32"
+          ? "Format: pe"
+          : process.platform === "darwin"
+            ? "Format: macho"
+            : "Format: elf";
+      const result = await run(["probe", targetBinary, "--config", configPath]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(expectedFormat);
+      expect(result.stdout).toMatch(/Arch:\s+(x86_64|aarch64|arm64)/i);
       // The engine marks target-derived content as untrusted.
       expect(result.stdout).toContain("UNTRUSTED DATA");
+
+      const jsonOk = await run(["probe", targetBinary, "--json", "--config", configPath]);
+      expect(jsonOk.code).toBe(0);
+      const parsedOk = JSON.parse(jsonOk.stdout) as { ok: boolean; open: string };
+      expect(parsedOk.ok).toBe(true);
+
+      const missingTarget = resolve("/nonexistent/missing-binary.exe");
+      const jsonFail = await run(["probe", missingTarget, "--json", "--config", configPath]);
+      expect(jsonFail.code).toBe(1);
+      const parsedFail = JSON.parse(jsonFail.stdout) as { ok: boolean; overview: string | null };
+      expect(parsedFail.ok).toBe(false);
+      expect(parsedFail.overview).toBeNull();
+    }, 120_000);
+
+    it("works out of the box with DEFAULT_CONFIG when no --config is provided", async () => {
+      const result = await run(["tools", "--json"]);
+      expect(result.code).toBe(0);
+      const parsed = JSON.parse(result.stdout) as { total: number };
+      expect(parsed.total).toBeGreaterThan(100);
     }, 120_000);
   });
 });

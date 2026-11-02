@@ -423,3 +423,137 @@ describe("AgentSession — outbound argument guard", () => {
     expect(connection.calls).toHaveLength(1);
   });
 });
+
+describe("AgentSession — scope boundary, extraTools, and context pruning", () => {
+  it("blocks catalog tools outside the resolved scope unless allowUnscopedTools is true", async () => {
+    const allTools = [...TOOLS, tool("execute_shell_command")];
+    const catalog = ToolCatalog.from(allTools);
+    const scope = catalog.resolveScope("custom", ["open_binary", "binary_session"]);
+    const connection = new FakeConnection(allTools);
+
+    const blockedChat = new ScriptedChat([
+      toolCallTurn("execute_shell_command", { cmd: "calc.exe" }),
+      textTurn("blocked"),
+    ]);
+    const strictAgent = new AgentSession({
+      connection,
+      chat: blockedChat,
+      catalog,
+      scope,
+      model: "test-model",
+      maxIterations: 4,
+      maxToolResultChars: 4_000,
+      temperature: 0.1,
+      maxTokens: 256,
+      contextWindow: 16_384,
+      systemPrompt: "system",
+    });
+
+    await strictAgent.ask("run shell");
+    expect(connection.calls).toHaveLength(0);
+    const toolMsg = strictAgent.transcript().find((m) => m.role === "tool")?.content ?? "";
+    expect(toolMsg).toContain("TOOL_ERROR");
+    expect(toolMsg).toContain("outside the active");
+
+    const allowedChat = new ScriptedChat([
+      toolCallTurn("execute_shell_command", { cmd: "whoami" }),
+      textTurn("allowed"),
+    ]);
+    const permissiveAgent = new AgentSession({
+      connection,
+      chat: allowedChat,
+      catalog,
+      scope,
+      model: "test-model",
+      maxIterations: 4,
+      maxToolResultChars: 4_000,
+      temperature: 0.1,
+      maxTokens: 256,
+      contextWindow: 16_384,
+      systemPrompt: "system",
+      allowUnscopedTools: true,
+    });
+
+    await permissiveAgent.ask("run shell");
+    expect(connection.calls).toHaveLength(1);
+    expect(connection.calls[0]?.name).toBe("execute_shell_command");
+  });
+
+  it("dispatches extraTools through extraToolHandlers and enforces argumentGuard first", async () => {
+    const handler = vi.fn(async (args: Record<string, unknown>) =>
+      `note saved: ${String(args["text"] ?? "")}`,
+    );
+    const catalog = ToolCatalog.from(TOOLS);
+    const scope = catalog.resolveScope("custom", ["open_binary"]);
+    const connection = new FakeConnection(TOOLS);
+    const chat = new ScriptedChat([
+      toolCallTurn("save_ui_note", { text: "entry point checked" }),
+      textTurn("saved"),
+    ]);
+
+    const agent = new AgentSession({
+      connection,
+      chat,
+      catalog,
+      scope,
+      model: "test-model",
+      maxIterations: 4,
+      maxToolResultChars: 4_000,
+      temperature: 0.1,
+      maxTokens: 256,
+      contextWindow: 16_384,
+      systemPrompt: "system",
+      extraTools: [
+        {
+          type: "function",
+          function: {
+            name: "save_ui_note",
+            description: "Save note",
+            parameters: { type: "object", properties: { text: { type: "string" } } },
+          },
+        },
+      ],
+      extraToolHandlers: { save_ui_note: handler },
+    });
+
+    const result = await agent.ask("record note");
+    expect(result.reason).toBe("final_answer");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(connection.calls).toHaveLength(0);
+  });
+
+  it("prunes multiple turn units without duplicating the system message", async () => {
+    const chat = new ScriptedChat([
+      textTurn("reply 1 ".repeat(120)),
+      textTurn("reply 2 ".repeat(120)),
+      textTurn("reply 3"),
+    ]);
+    const { agent } = build({ chat, contextWindow: 1_024 });
+
+    await agent.ask("question 1 ".repeat(80));
+    await agent.ask("question 2 ".repeat(80));
+    await agent.ask("question 3");
+
+    const systemMessages = agent.transcript().filter((m) => m.role === "system");
+    expect(systemMessages).toHaveLength(1);
+
+    const thirdRequestSystemCount =
+      chat.requests[2]?.messages.filter((m) => m.role === "system").length ?? 0;
+    expect(thirdRequestSystemCount).toBe(1);
+    // Earlier turns should have been dropped to stay within the 1024-token budget.
+    expect(chat.requests[2]?.messages.some((m) => m.content?.includes("question 1"))).toBe(false);
+  });
+
+  it("populates result.error when the model transport fails", async () => {
+    const failingChat: ChatTransport = {
+      async *streamChat() {
+        yield* [];
+        throw new Error("connection reset by peer");
+      },
+    };
+    const { agent } = build({ chat: failingChat });
+    const result = await agent.ask("hello");
+    expect(result.reason).toBe("failed");
+    expect(result.error).toContain("connection reset by peer");
+  });
+});

@@ -262,14 +262,23 @@ describe("LlamaServerClient — SSE parsing", () => {
     expect(turn.finishReason).toBe("tool_calls");
   });
 
-  it("handles a server that ignores stream:true and returns whole JSON", async () => {
+  it("handles a server that ignores stream:true and returns whole JSON with choice.message only", async () => {
     const body = JSON.stringify({
       choices: [
         {
           index: 0,
-          message: { role: "assistant", content: "non-streamed" },
-          delta: { content: "non-streamed" },
-          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: "non-streamed message only",
+            tool_calls: [
+              {
+                id: "call_json_1",
+                type: "function",
+                function: { name: "binary_session", arguments: "{}" },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
         },
       ],
       usage: { prompt_tokens: 5, completion_tokens: 2 },
@@ -282,9 +291,30 @@ describe("LlamaServerClient — SSE parsing", () => {
 
     const turn = await collectTurn(client.streamChat(baseRequest));
 
-    expect(turn.content).toBe("non-streamed");
-    expect(turn.finishReason).toBe("stop");
+    expect(turn.content).toBe("non-streamed message only");
+    expect(turn.toolCalls).toHaveLength(1);
+    expect(turn.toolCalls[0]?.function.name).toBe("binary_session");
+    expect(turn.finishReason).toBe("tool_calls");
     expect(turn.usage?.promptTokens).toBe(5);
+  });
+
+  it("resets the idle timeout on incoming SSE chunks so long active generations complete", async () => {
+    // 5 chunks * 50ms = ~250ms total wall clock, exceeding the 140ms idle timeout,
+    // while each inter-chunk gap (50ms) stays well below 140ms.
+    const server = await serve(() => ({
+      delayBetweenChunksMs: 50,
+      chunks: [
+        sseFrame(textChunk("a")),
+        sseFrame(textChunk("b")),
+        sseFrame(textChunk("c")),
+        sseFrame(textChunk("d")),
+        SSE_DONE,
+      ],
+    }));
+    const client = new LlamaServerClient({ baseUrl: server.url, requestTimeoutMs: 140 });
+
+    const turn = await collectTurn(client.streamChat(baseRequest));
+    expect(turn.content).toBe("abcd");
   });
 });
 

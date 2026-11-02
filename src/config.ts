@@ -6,7 +6,11 @@
  * offending field path so the desktop shell can surface it verbatim.
  */
 
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { NetworkPolicyError, assertLoopbackUrl } from "./platform/net.js";
 
 export type ReaTransportKind = "stdio" | "http";
@@ -23,6 +27,8 @@ export interface ReaServerConfig {
   readonly httpUrl: string;
   /** Seconds to wait for `initialize` to complete. */
   readonly startupTimeoutSec: number;
+  /** Propagated from `policy.allowNonLoopback` so HTTP transport enforces loopback policy. */
+  readonly allowNonLoopback?: boolean;
 }
 
 export interface LlmConfig {
@@ -47,6 +53,8 @@ export interface AgentConfig {
   readonly maxArgumentArrayItems: number;
   /** Maximum serialized size of outbound tool arguments, in bytes. */
   readonly maxArgumentBytes: number;
+  /** Allow calling catalog tools outside the advertised `toolScope` (default false). */
+  readonly allowUnscopedTools: boolean;
 }
 
 export interface PolicyConfig {
@@ -72,14 +80,32 @@ export class ConfigError extends Error {
   }
 }
 
+export function resolveDefaultReaEntry(): string {
+  const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const bundled = join(packageRoot, "vendor", "rea-agents", "scripts", "rea.mjs");
+  if (existsSync(bundled)) return bundled;
+
+  try {
+    const req = createRequire(import.meta.url);
+    const pkgJson = req.resolve("rea-agents/package.json");
+    const installed = join(dirname(pkgJson), "scripts", "rea.mjs");
+    if (existsSync(installed)) return installed;
+  } catch {
+    // Fall back to the conventional bundled layout path when not installed.
+  }
+
+  return "vendor/rea-agents/scripts/rea.mjs";
+}
+
 export const DEFAULT_CONFIG: ReaClientConfig = {
   rea: {
     transport: "stdio",
-    command: "node",
-    args: ["scripts/rea.mjs", "mcp"],
+    command: process.execPath,
+    args: [resolveDefaultReaEntry(), "mcp"],
     env: { NODE_ENV: "production" },
     httpUrl: "http://127.0.0.1:8721/mcp",
     startupTimeoutSec: 45,
+    allowNonLoopback: false,
   },
   llm: {
     baseUrl: "http://127.0.0.1:8080/v1",
@@ -96,6 +122,7 @@ export const DEFAULT_CONFIG: ReaClientConfig = {
     customTools: [],
     maxArgumentArrayItems: 256,
     maxArgumentBytes: 65_536,
+    allowUnscopedTools: false,
   },
   policy: {
     allowNonLoopback: false,
@@ -189,9 +216,51 @@ function oneOf<T extends string>(
   return value as T;
 }
 
+function assertKnownKeys(source: Obj, allowed: readonly string[], field: string): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(source)) {
+    if (!allowedSet.has(key)) {
+      throw new ConfigError(
+        `${field}.${key}`,
+        `unknown configuration key (expected one of: ${allowed.join(", ")})`,
+      );
+    }
+  }
+}
+
 // --------------------------------------------------------------------------
 // Parsing
 // --------------------------------------------------------------------------
+
+const ROOT_KEYS = ["$schema", "rea", "llm", "agent", "policy", "workspaceDir"] as const;
+const REA_KEYS = [
+  "transport",
+  "command",
+  "args",
+  "cwd",
+  "env",
+  "httpUrl",
+  "startupTimeoutSec",
+] as const;
+const LLM_KEYS = [
+  "baseUrl",
+  "model",
+  "apiKey",
+  "temperature",
+  "maxTokens",
+  "contextWindow",
+  "requestTimeoutMs",
+] as const;
+const AGENT_KEYS = [
+  "maxIterations",
+  "maxToolResultChars",
+  "toolScope",
+  "customTools",
+  "maxArgumentArrayItems",
+  "maxArgumentBytes",
+  "allowUnscopedTools",
+] as const;
+const POLICY_KEYS = ["allowNonLoopback"] as const;
 
 /**
  * Validates a raw configuration object and returns an immutable config.
@@ -200,11 +269,19 @@ function oneOf<T extends string>(
  */
 export function parseConfig(raw: unknown): ReaClientConfig {
   const root = raw === undefined || raw === null ? {} : asObject(raw, "config");
+  assertKnownKeys(root, ROOT_KEYS, "config");
 
   const reaRaw = root["rea"] === undefined ? {} : asObject(root["rea"], "rea");
+  assertKnownKeys(reaRaw, REA_KEYS, "rea");
+
   const llmRaw = root["llm"] === undefined ? {} : asObject(root["llm"], "llm");
+  assertKnownKeys(llmRaw, LLM_KEYS, "llm");
+
   const agentRaw = root["agent"] === undefined ? {} : asObject(root["agent"], "agent");
+  assertKnownKeys(agentRaw, AGENT_KEYS, "agent");
+
   const policyRaw = root["policy"] === undefined ? {} : asObject(root["policy"], "policy");
+  assertKnownKeys(policyRaw, POLICY_KEYS, "policy");
 
   const transport = oneOf(
     optString(reaRaw, "transport", "rea"),
@@ -238,13 +315,28 @@ export function parseConfig(raw: unknown): ReaClientConfig {
     throw error;
   }
 
+  const reaHttpUrl = reqString(reaRaw, "httpUrl", "rea", DEFAULT_CONFIG.rea.httpUrl);
+  try {
+    assertLoopbackUrl(reaHttpUrl, {
+      allowNonLoopback: transport === "http" || reaRaw["httpUrl"] !== undefined
+        ? allowNonLoopback
+        : true,
+      settingName: "rea.httpUrl",
+    });
+  } catch (error) {
+    if (error instanceof NetworkPolicyError) {
+      throw new ConfigError("rea.httpUrl", error.message.replace(/^rea\.httpUrl /, ""));
+    }
+    throw error;
+  }
+
   const rea: ReaServerConfig = {
     transport,
     command: reqString(reaRaw, "command", "rea", DEFAULT_CONFIG.rea.command),
     args: optStringArray(reaRaw, "args", "rea") ?? [...DEFAULT_CONFIG.rea.args],
     ...optional("cwd", optString(reaRaw, "cwd", "rea")),
     env,
-    httpUrl: reqString(reaRaw, "httpUrl", "rea", DEFAULT_CONFIG.rea.httpUrl),
+    httpUrl: reaHttpUrl,
     startupTimeoutSec: numInRange(
       reaRaw,
       "startupTimeoutSec",
@@ -253,6 +345,7 @@ export function parseConfig(raw: unknown): ReaClientConfig {
       1,
       600,
     ),
+    allowNonLoopback,
   };
 
   const llm: LlmConfig = {
@@ -319,6 +412,9 @@ export function parseConfig(raw: unknown): ReaClientConfig {
       256,
       16_777_216,
     ),
+    allowUnscopedTools:
+      optBool(agentRaw, "allowUnscopedTools", "agent") ??
+      DEFAULT_CONFIG.agent.allowUnscopedTools,
   };
 
   if (agent.toolScope === "custom" && agent.customTools.length === 0) {
