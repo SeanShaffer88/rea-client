@@ -155,28 +155,57 @@ jobs:
           } >> release-notes.md
           cat release-notes.md
 
-      # Re-runs are safe: an existing release is left in place and its assets
-      # are replaced, so a failed upload does not require deleting the release.
+      # The release is created before anything is uploaded, and the upload is a
+      # separate step. `gh release create <files...>` deletes the release again
+      # if one of the asset uploads fails, so a single flaky 190 MB upload would
+      # leave nothing behind to retry against; this way the release exists and
+      # re-running the job replaces the assets.
       #
-      # Deleting a tag turns its release into a draft, and a first publish that
-      # died between create and upload leaves one too. `gh release view` sees a
-      # draft, so that path would upload the assets and then stop, leaving a
-      # release nobody can find. It is published explicitly instead.
-      - name: Publish the release
+      # Deleting a tag turns its release into a draft, and a publish that died
+      # half way leaves one too. `gh release view` sees drafts, so the draft flag
+      # is cleared explicitly rather than left hidden.
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/*.tgz release/SHA256SUMS installer/*.exe installer/SHA256SUMS-windows.txt --clobber
-            gh release edit "$GITHUB_REF_NAME" --draft=false
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "rea-client $GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --draft=false
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "rea-client $GITHUB_REF_NAME" \
               --notes-file release-notes.md \
-              --verify-tag \
-              release/*.tgz release/SHA256SUMS installer/*.exe installer/SHA256SUMS-windows.txt
+              --verify-tag
           fi
+
+      # Small assets first: if the large installer upload has to be retried, the
+      # release is already useful. Each file is retried on its own so one
+      # transient failure does not throw away the others.
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # Listed smallest first on purpose: the installer is ~190 MB, and if it
+          # is the one that has to be retried the release already has the rest.
+          for asset in release/*.tgz release/SHA256SUMS installer/SHA256SUMS-windows.txt installer/*.exe; do
+            for attempt in 1 2 3; do
+              if gh release upload "$GITHUB_REF_NAME" "$asset" --clobber; then
+                echo "uploaded $asset"
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "failed to upload $asset after 3 attempts" >&2
+                exit 1
+              fi
+              echo "retrying $asset (attempt $attempt failed)" >&2
+              sleep 15
+            done
+          done
+          gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[] | "\(.name) \(.size) \(.state)"'
 
       - name: Summarise
         run: |
