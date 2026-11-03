@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Check, CheckCircle2, ChevronDown, Copy, AlertCircle, LoaderCircle, X, Terminal, ShieldCheck } from "lucide-react";
 import type { ToolActivity } from "./state";
 
@@ -19,8 +19,9 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
 }
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function Modal({ title, subtitle, children, onClose }: { title: string; subtitle?: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ title, subtitle, children, onClose, className = "" }: { title: string; subtitle?: string; children: ReactNode; onClose: () => void; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
@@ -36,6 +37,7 @@ export function Modal({ title, subtitle, children, onClose }: { title: string; s
     const first = focusables()[0];
     (first ?? dialog).focus?.();
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
       if (event.key !== "Tab") return;
       const items = focusables();
       if (items.length === 0) return;
@@ -59,9 +61,27 @@ export function Modal({ title, subtitle, children, onClose }: { title: string; s
       previouslyFocused?.focus?.();
     };
   }, []);
-  return <dialog ref={ref} className="modal" onCancel={onClose} onClick={(event) => { if (event.target === ref.current) onClose(); }} aria-labelledby="modal-title" aria-modal="true">
-    <div className="modal-inner"><header className="modal-header"><div><h2 id="modal-title">{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20} /></button></header>{children}</div>
+  return <dialog ref={ref} className={`modal ${className}`} onCancel={onClose} onClick={(event) => { if (event.target === ref.current) onClose(); }} aria-labelledby={titleId} aria-modal="true">
+    <div className="modal-inner"><header className="modal-header"><div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20} /></button></header>{children}</div>
   </dialog>;
+}
+const compactQuery = "(max-width: 1199px)";
+function subscribeViewport(callback: () => void): () => void {
+  if (typeof window.matchMedia !== "function") {
+    window.addEventListener("resize", callback);
+    return () => window.removeEventListener("resize", callback);
+  }
+  const query = window.matchMedia(compactQuery);
+  query.addEventListener("change", callback);
+  return () => query.removeEventListener("change", callback);
+}
+function isCompact(): boolean { return typeof window.matchMedia === "function" ? window.matchMedia(compactQuery).matches : window.innerWidth < 1200; }
+export function ResponsiveInspector({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
+  const compact = useSyncExternalStore(subscribeViewport, isCompact, () => false);
+  if (!open) return null;
+  return compact
+    ? <Modal title="Session Inspector" onClose={onClose} className="inspector-dialog"><div id="session-inspector" className="inspector-body">{children}</div></Modal>
+    : <aside id="session-inspector" className="inspector" aria-label="Session Inspector">{children}</aside>;
 }
 export function ErrorNotice({ children, onDismiss }: { children: ReactNode; onDismiss?: () => void }) {
   return <div className="error-notice" role="alert"><AlertCircle size={18} /><div>{children}</div>{onDismiss && <button className="icon-button" aria-label="Dismiss error" onClick={onDismiss}><X size={15} /></button>}</div>;

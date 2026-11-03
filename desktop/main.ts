@@ -29,8 +29,8 @@ let startupWindow: BrowserWindow | undefined;
 
 async function showStartup(stage: string): Promise<void> {
   if (closing) return;
-  startupWindow ??= new BrowserWindow({ width: 620, height: 330, resizable: false, title: "REA Workspace", backgroundColor: "#f7f8fa", autoHideMenuBar: true, webPreferences: WINDOW_WEB_PREFERENCES });
-  const html = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{margin:0;background:#f7f8fa;font:16px 'Segoe UI',sans-serif;color:#172033;padding:30px}main{background:white;border:1px solid #e2e6eb;border-radius:12px;padding:32px}small{color:#64748b}h1{font-size:26px}p{color:#334155}</style><main><small>REA WORKSPACE</small><h1>Starting Local Analysis</h1><p>${stage}</p><small>Everything runs locally. First startup may take a few minutes.</small></main>`;
+  startupWindow ??= new BrowserWindow({ width: 620, height: 330, resizable: false, title: "REA Workspace", backgroundColor: "#121317", autoHideMenuBar: true, webPreferences: WINDOW_WEB_PREFERENCES });
+  const html = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{margin:0;background:#121317;font:16px 'Segoe UI',sans-serif;color:#f3f4f6;padding:30px}main{background:#1b1c22;border:1px solid #383a46;border-radius:12px;padding:32px}small{color:#b5b7c2}h1{font-size:26px}p{color:#d0d2dc}</style><main><small>REA WORKSPACE</small><h1>Starting Local Analysis</h1><p>${stage}</p><small>Everything runs locally. First startup may take a few minutes.</small></main>`;
   const activeStartup = startupWindow;
   try {
     await activeStartup.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
@@ -83,7 +83,7 @@ async function createWindow(): Promise<void> {
 
   const activeWindow = new BrowserWindow({
     width: 1480, height: 960, minWidth: 960, minHeight: 680,
-    title: "REA Workspace", backgroundColor: "#f7f8fa", show: false,
+    title: "REA Workspace", backgroundColor: "#121317", show: false,
     autoHideMenuBar: true,
     webPreferences: { ...WINDOW_WEB_PREFERENCES, preload: resolve(root, "dist-electron/preload.cjs") },
   });

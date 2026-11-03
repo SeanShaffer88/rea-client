@@ -237,6 +237,7 @@ let container: HTMLDivElement | undefined;
 
 beforeEach(() => {
   (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  Object.defineProperty(window, "innerWidth", {value:1440,writable:true,configurable:true});
   container = document.createElement("div");
   document.body.append(container);
 });
@@ -260,15 +261,62 @@ async function render(): Promise<void> {
 const buttonWith = (label: string): HTMLButtonElement | undefined =>
   [...document.querySelectorAll("button")].find((button) => button.textContent?.includes(label)) as HTMLButtonElement | undefined;
 
+describe("Responsive Session Inspector", () => {
+  it("starts beside the desktop conversation and leaves no grid item when closed", async () => {
+    const { calls } = installFetch();
+    await render();
+    await waitFor("desktop inspector", () => document.querySelector("aside.inspector") !== null);
+    await act(async () => (document.querySelector('[aria-label="Close Session Inspector"]') as HTMLButtonElement).click());
+    expect(document.querySelector(".inspector")).toBeNull();
+    expect(document.querySelector(".workspace-layout")?.children.length).toBe(1);
+    await act(async () => (document.querySelector(".inspector-toggle") as HTMLButtonElement).click());
+    expect(document.querySelector("aside.inspector")).not.toBeNull();
+    expect(calls.some((call) => call.method === "agent.reset")).toBe(false);
+  });
+
+  it("traps compact drawer focus and restores the opener without losing the draft or scope", async () => {
+    window.innerWidth = 700;
+    const { calls } = installFetch({ "target.session": () => ({ body: { result: { session: { open: true, targetPath: "/usr/bin/ls", format: "elf", architecture: "x86_64" } } } }) });
+    await render();
+    await waitFor("target", () => document.querySelector(".target-header") !== null);
+    expect(document.querySelector(".inspector")).toBeNull();
+    const opener = document.querySelector(".inspector-toggle") as HTMLButtonElement;
+    await act(async () => { opener.focus(); opener.click(); });
+    const dialog = document.querySelector("dialog.inspector-dialog") as HTMLDialogElement;
+    expect(dialog.open).toBe(true);
+    expect(document.getElementById(dialog.getAttribute("aria-labelledby") ?? "")?.textContent).toBe("Session Inspector");
+    const scope = dialog.querySelector("select") as HTMLSelectElement;
+    scope.focus();
+    await act(async () => {
+      const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(textarea, "Keep this draft");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.activeElement).toBe(scope);
+    expect(scope.value).toBe("binary-core");
+    const buttons = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]),select:not([disabled])')];
+    buttons.at(-1)?.focus();
+    await act(async () => buttons.at(-1)?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(buttons[0]);
+    await act(async () => buttons[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(buttons.at(-1));
+    await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(document.querySelector("dialog.inspector-dialog")).toBeNull();
+    expect(document.activeElement).toBe(opener);
+    expect((document.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this draft");
+    expect(calls.some((call) => call.method === "agent.reset")).toBe(false);
+  });
+});
+
 describe("App", () => {
   it("boots the workspace, navigates the catalog, and lazily loads a tool schema", async () => {
     const { calls } = installFetch();
     await render();
-    await waitFor("workspace", () => document.querySelector(".page-heading h1")?.textContent === "Analysis workspace");
+    await waitFor("workspace", () => document.querySelector(".page-heading h1")?.textContent === "Workspace");
     expect(document.querySelector(".target-header")).toBeNull();
     expect(calls.map((call) => call.method)).toEqual(expect.arrayContaining(["tools.list", "target.session", "engine.ping"]));
 
-    await act(async () => buttonWith("Tool catalog")?.click());
+    await act(async () => buttonWith("Tool Catalog")?.click());
     await waitFor("catalog rows", () => document.querySelectorAll(".tool-row").length === 2);
     await act(async () => (document.querySelectorAll(".tool-row")[0] as HTMLButtonElement).click());
     await waitFor("tool detail", () => document.querySelector(".tool-detail h2")?.textContent === "binary_overview");
@@ -286,7 +334,7 @@ describe("App", () => {
     await render();
     await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
 
-    await act(async () => buttonWith("Open binary")?.click());
+    await act(async () => buttonWith("Open Program")?.click());
     await waitFor("dialog", () => document.querySelector("dialog[open]") !== null);
     // Focus moves into the modal so keyboard users are not left behind it.
     expect(document.querySelector("dialog[open]")?.contains(document.activeElement)).toBe(true);
@@ -302,7 +350,7 @@ describe("App", () => {
     expect(document.querySelector(".target-heading p")?.textContent).toBe("/usr/bin/ls");
     expect(document.querySelector(".inspector")?.textContent).toContain("x86_64");
 
-    await act(async () => buttonWith("Target overview")?.click());
+    await act(async () => buttonWith("Target Overview")?.click());
     expect(document.querySelector(".overview-failure h3")?.textContent).toBe("Target opened, but no overview was available.");
     expect(document.querySelector(".overview-failure .code-panel")?.textContent).toContain("provider_unavailable");
     expect(document.querySelector(".overview-content .untrusted-note")).toBeNull();
