@@ -1,0 +1,81 @@
+# Installer packaging for the desktop app.
+#
+# Two things about this app decide most of the options below:
+#
+#   1. The analysis engine is a *child process* (`dist/cli.js`, run with
+#      ELECTRON_RUN_AS_NODE), and it in turn launches the REA MCP server. Child
+#      processes are plain Node, which cannot read inside an asar archive, so
+#      everything they execute has to be unpacked next to it.
+#   2. The app is air-gapped: nothing here may fetch anything at install time or
+#      at first launch. The REA server ships inside the installer, which is why
+#      rea-agents is a runtime dependency rather than a vendored copy.
+
+appId: io.github.morluto.rea-workspace
+productName: REA Workspace
+copyright: MIT licensed
+
+directories:
+  output: release
+  buildResources: build
+
+# package.json has no `main` (the repo is also an npm library); the packaged app
+# needs one, and electron-builder writes it into the generated manifest.
+extraMetadata:
+  main: dist-electron/main.js
+
+files:
+  - dist/**/*
+  - dist-desktop/**/*
+  - dist-electron/**/*
+  - package.json
+  - LICENSE
+
+# dist/ is executed by the CLI child process, node_modules by both the child and
+# the REA server it spawns. dist-desktop and dist-electron are only ever read by
+# Electron itself, so they stay packed.
+asarUnpack:
+  - dist/**/*
+  - node_modules/**/*
+
+# Prebuilt binaries only: rea-agents pins @lydell/node-pty, which ships N-API
+# builds per platform. Rebuilding would need a C++ toolchain and would gain
+# nothing, so the packaging step never runs node-gyp.
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  artifactName: ${name}-${version}-windows-${arch}-setup.${ext}
+
+nsis:
+  # A per-user install with a choosable directory: no elevation prompt, and the
+  # app can write its workspace/config next to the user's other data.
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: REA Workspace
+  uninstallDisplayName: REA Workspace ${version}
+  # Uninstalling must not delete the user's saved cases or their edited config.
+  deleteAppDataOnUninstall: false
+  artifactName: ${name}-${version}-windows-${arch}-setup.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  icon: build/icon.png
+  category: Development
+  artifactName: ${name}-${version}-linux-${arch}.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+  artifactName: ${name}-${version}-mac-${arch}.${ext}

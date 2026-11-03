@@ -80,14 +80,27 @@ export class ConfigError extends Error {
   }
 }
 
+/**
+ * Maps a path inside a packed `app.asar` to the unpacked copy next to it.
+ *
+ * Electron's main process reads archives transparently, but the REA server is a
+ * child process: it is launched with `ELECTRON_RUN_AS_NODE`, which is plain
+ * Node and has no asar support at all. Electron-builder unpacks `node_modules`
+ * and `vendor` for exactly this reason, so a path that names the archive has to
+ * be rewritten before it is handed to a child.
+ */
+export function unpackedPath(path: string): string {
+  return path.replace(/app\.asar(?=[\\/])/, "app.asar.unpacked");
+}
+
 export function resolveDefaultReaEntry(): string {
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const bundled = join(packageRoot, "vendor", "rea-agents", "scripts", "rea.mjs");
+  const bundled = unpackedPath(join(packageRoot, "vendor", "rea-agents", "scripts", "rea.mjs"));
   if (existsSync(bundled)) return bundled;
 
   try {
     const req = createRequire(import.meta.url);
-    const pkgJson = req.resolve("rea-agents/package.json");
+    const pkgJson = unpackedPath(req.resolve("rea-agents/package.json"));
     const installed = join(dirname(pkgJson), "scripts", "rea.mjs");
     if (existsSync(installed)) return installed;
   } catch {
@@ -95,6 +108,48 @@ export function resolveDefaultReaEntry(): string {
   }
 
   return "vendor/rea-agents/scripts/rea.mjs";
+}
+
+/**
+ * Where an installed desktop build keeps its mutable files.
+ *
+ * A packaged app is launched from wherever the shortcut points and lives in a
+ * directory it may not be allowed to write to (Program Files), so the config,
+ * the workspace, and therefore every saved case belong under the user's
+ * application data. The CLI keeps using `./config.json` because a terminal user
+ * is standing in a directory they chose.
+ */
+export function appDataLayout(userDataDir: string): {
+  readonly configPath: string;
+  readonly workspaceDir: string;
+} {
+  return {
+    configPath: join(userDataDir, "config.json"),
+    workspaceDir: join(userDataDir, "workspace"),
+  };
+}
+
+/**
+ * The config written on first launch.
+ *
+ * Deliberately partial: `rea` is omitted so the bundled server path is resolved
+ * against the running installation, and everything present is a value a user
+ * might reasonably change. `parseConfig` fills the rest from defaults.
+ */
+export function firstRunConfig(workspaceDir: string): string {
+  return `${JSON.stringify(
+    {
+      workspaceDir,
+      llm: {
+        baseUrl: DEFAULT_CONFIG.llm.baseUrl,
+        model: DEFAULT_CONFIG.llm.model,
+      },
+      agent: { toolScope: DEFAULT_CONFIG.agent.toolScope },
+      policy: { allowNonLoopback: DEFAULT_CONFIG.policy.allowNonLoopback },
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 export const DEFAULT_CONFIG: ReaClientConfig = {

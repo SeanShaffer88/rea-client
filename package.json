@@ -7,6 +7,8 @@
   "engines": {
     "node": ">=22.12.0"
   },
+  "author": "rea-client contributors",
+  "homepage": "https://github.com/SeanShaffer88/rea-client",
   "bin": {
     "rea-client": "./dist/cli.js"
   },
@@ -38,10 +40,14 @@
     "typecheck:desktop": "tsc -p desktop/ui/tsconfig.json && tsc -p desktop/tsconfig.json --noEmit",
     "desktop": "electron dist-electron/main.js",
     "desktop:web": "node dist/desktop/server.js",
-    "desktop:preview": "node dist/desktop/server.js --host 0.0.0.0 --preview --port 5173"
+    "desktop:preview": "node dist/desktop/server.js --host 0.0.0.0 --preview --port 5173",
+    "pack:dir": "npm run build:desktop && electron-builder --dir --publish never",
+    "pack:win": "npm run build:desktop && electron-builder --win --publish never",
+    "pack:linux": "npm run build:desktop && electron-builder --linux --publish never"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.4.0"
+    "@modelcontextprotocol/client": "2.4.0",
+    "rea-agents": "6.8.0"
   },
   "devDependencies": {
     "@fontsource-variable/inter": "^5.3.0",
@@ -52,9 +58,9 @@
     "@vitejs/plugin-react": "^6.2.1",
     "@vitest/coverage-v8": "^5.0.5",
     "electron": "^45.2.1",
+    "electron-builder": "^26.18.1",
     "jsdom": "^30.1.3",
     "lucide-react": "^1.66.0",
-    "rea-agents": "6.8.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",

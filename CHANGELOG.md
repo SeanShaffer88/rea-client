@@ -9,7 +9,31 @@ releases; see [Releasing](#releasing).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A Windows installer.** `npm run pack:win` builds
+  `rea-client-<version>-windows-x64-setup.exe`: a per-user NSIS install (no
+  elevation, choosable directory) that contains the Electron runtime, the
+  engine, the workspace UI, and REA itself (`rea-agents` 6.8.0 from
+  [morluto/rea](https://github.com/morluto/rea)), so an installed copy needs no
+  Node.js, no network, and no separate REA install. The app writes its config and
+  workspace to `%APPDATA%\REA Workspace`, and uninstalling leaves both behind.
+- **`installer.yml`**, which builds that installer on `windows-latest` — called
+  by the release workflow, runnable on demand, and run automatically on pull
+  requests that touch packaging. `release.yml` now refuses to publish without
+  the installer, attaches it plus `SHA256SUMS-windows.txt`, and writes the
+  unsigned-build warning into the release notes.
+
+### Changed
+
+- **`rea-agents` is a runtime dependency, not a dev dependency.** The CLI
+  launches it, so a consumer of this package needs it installed, and the
+  installer has to contain it.
+- **Packaged paths are asar-aware.** `unpackedPath()` maps a script path inside
+  `app.asar` to the copy electron-builder unpacks beside it, because the engine
+  child processes are plain Node and cannot read an archive. Covered by
+  `test/unit/packaging.test.ts`, which also asserts the invariants
+  `electron-builder.yml` has to keep.
 
 ## [0.2.0] — 2026-11-03
 
