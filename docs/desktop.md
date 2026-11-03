@@ -111,6 +111,15 @@ does not touch a binary or a model.
   cannot write the bundle the report is still saved, and the reason is shown
   rather than leaving a file-shaped hole. The dialog states the exact folder and
   files it will write before anything touches disk.
+- **Reopening a case** — a saved case is only useful if it can be read back, so
+  selecting one opens it in place of the live workspace: the target's name,
+  format, architecture and digest as recorded, the turn/observation/evidence
+  counts from the file itself, the files and their sizes, the counts inside
+  REA's bundle, and the saved report rendered as Markdown with a JSON tab. Files
+  the page renders are treated as untrusted input (links and images are removed,
+  exactly as in the transcript). A folder whose `analysis.json` is not valid
+  JSON, or that has no JSON at all, says so and lists what the folder does
+  contain instead of showing an empty analysis.
 - **Diagnostics** — `engine.doctor` verdicts with remediation, reconnection, and
   a live engine event log.
 - **Settings** — read-only model/network/scope configuration, workspace
@@ -118,6 +127,10 @@ does not touch a binary or a model.
 
 ## Security boundaries
 
+- **Reading a case re-validates the path.** `case.open` resolves the name under
+  the cases root, refuses anything that escapes it, and only returns files from a
+  directory that exists. Saved report text is shown as untrusted content with
+  navigation stripped.
 - **Cases and evidence are written into the workspace, by the service.**
   `case.save` and `evidence.export` resolve their own destination, create it
   `0700`, and reject separators, `..`, and oversized names, so the page can name
@@ -207,7 +220,17 @@ the field keep the old behaviour.
   not keep; the destination and every filename stay with the bridge.
 - `case.list` — reads the cases root and describes only directories that
   contain both report files, newest first (25 shown, `total` reports the rest).
-  A folder without the reports is not presented as a case.
+  A folder without the reports is not presented as a case. Where `analysis.json`
+  is at most 1 MiB it is parsed for a `summary` (target identity, scope, engine
+  version, turns, observations, evidence references), so the list says what each
+  case is about; an unparseable report simply has no summary.
+- `case.open { name }` — resolves the folder under the cases root (traversal and
+  non-directory targets are refused), then returns the file list, the summary,
+  the saved Markdown report, the JSON companion, and the record/unknown counts
+  read from REA's bundle when one is present. Documents over 4 000 000
+  characters are returned truncated and flagged, never silently. A folder with
+  no `analysis.json`, or one that does not parse, returns `{ ok: false, error }`
+  with the file list so the UI can explain what is there.
 - `target.probe` now distinguishes an opened target from an unavailable
   overview: `{ ok: true, overview: null, overviewError: "..." }`. An error string
   is never presented as analysis output.
@@ -251,7 +274,9 @@ real ELF target (`/usr/bin/ls`):
   `dist/cli.js serve` and the real REA server: `case.save` wrote `analysis.md`,
   `analysis.json`, and `evidence-bundle.json` (written by REA, 105 bytes, 0
   unknowns) into `workspace/cases/<name>/`, and `case.list` described it back.
-  Saving the same name again was refused with a specific message.
+  Saving the same name again was refused with a specific message. `case.open`
+  returned the same Markdown and JSON that were written, with the summary and
+  bundle counts read back from the folder.
 - `npm run typecheck`, `npm run typecheck:desktop`, all unit tests, and the
   coverage gate pass.
 
@@ -268,7 +293,7 @@ Automated coverage for the desktop tier:
 | Retained evidence readers | `test/unit/evidenceBundle.test.ts` — summary envelope, text fallback, id filtering, record selection, export result |
 | Evidence display helpers | `test/unit/uiEvidence.test.ts` — id shortening, filtering, honest counts, export summary, conflict detection |
 | Bridge RPC surface | `test/unit/jsonRpcServer.test.ts` — evidence id validation, summary-only listing, single-record reads, workspace-contained exports |
-| Case folders | `test/unit/jsonRpcServer.test.ts` (save/overwrite/name rules, listing, bundle inclusion), `test/unit/uiCases.test.ts` (file summaries, conflict detection), `test/integration/gatewayBridge.test.ts` (real engine process, real REA bundle), Rendered App cases in `uiApp.test.tsx` |
+| Case folders | `test/unit/jsonRpcServer.test.ts` (save/overwrite/name rules, listing, reading back, unreadable folders), `test/unit/desktopCases.test.ts` (report and bundle readers), `test/unit/uiCases.test.ts` (file summaries, target identity, stats, conflict detection), `test/integration/gatewayBridge.test.ts` (real engine process, real REA bundle, read-back), App flows in `uiApp.test.tsx` |
 | Report export | `test/unit/report.test.ts` — turn pairing, per-target attribution, Markdown fencing, file names |
 | Drop routing | `test/unit/drop.test.ts` — open-in-place vs upload vs reject |
 

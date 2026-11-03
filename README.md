@@ -163,8 +163,8 @@ with lazily loaded schemas, shows projected evidence and evidence IDs, lists
 the evidence REA itself retained (opening one record, or exporting REA's
 canonical bundle into the workspace), saves a finished analysis as a case folder
 holding the Markdown report, its versioned JSON companion, and REA's canonical
-bundle, runs diagnostics with remediation, and can still download the report
-from the browser. The renderer has
+bundle, reopens any saved case to read the report it captured, runs diagnostics
+with remediation, and can still download the report from the browser. The renderer has
 no Node, filesystem, or arbitrary IPC access: Electron runs with sandbox and
 context isolation, the preload exposes exactly one file-dialog method, and all
 state changes pass an allowlisted, token-authenticated HTTP gateway.

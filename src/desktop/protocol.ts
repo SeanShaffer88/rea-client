@@ -88,11 +88,46 @@ export interface CaseSnapshot {
   /** Present when the save was refused (for example an existing case name). */
   error?: string;
 }
+export interface CaseTargetSummary {
+  name?: string;
+  path?: string;
+  format?: string;
+  architecture?: string;
+  sha256?: string;
+}
+/** What a saved `analysis.json` says about itself, as far as it can be read. */
+export interface CaseSummary {
+  schemaVersion?: number;
+  exportedAt?: string;
+  engineVersion?: string;
+  scope?: string;
+  target: CaseTargetSummary;
+  turns: number;
+  observations: number;
+  evidenceReferences: number;
+}
 export interface SavedCase {
   name: string;
   directory: string;
   savedAt: string;
   files: CaseFile[];
+  summary?: CaseSummary;
+}
+/** A saved case read back from disk. */
+export interface CaseOpenSnapshot {
+  ok: boolean;
+  name: string;
+  directory?: string;
+  savedAt?: string;
+  files: CaseFile[];
+  summary?: CaseSummary;
+  /** Saved Markdown report; absent if the folder had none. */
+  report?: string;
+  reportTruncated?: boolean;
+  reportJson?: string;
+  jsonTruncated?: boolean;
+  bundle?: { path: string; bytes: number; records?: number; unknowns?: number };
+  error?: string;
 }
 export interface CaseListSnapshot {
   ok: boolean;

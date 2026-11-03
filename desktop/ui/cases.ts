@@ -1,4 +1,4 @@
-import type { CaseSnapshot, SavedCase } from "../../src/desktop/protocol.js";
+import type { CaseSnapshot, CaseSummary, SavedCase } from "../../src/desktop/protocol.js";
 import { relativeToWorkspace } from "./evidence.js";
 
 /**
@@ -67,4 +67,31 @@ export function caseNameProblem(name: string): string | null {
   if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) return "Use only letters, digits, dots, dashes, or underscores.";
   if (trimmed.includes("..")) return "A name cannot contain ..";
   return null;
+}
+
+/** "ls · elf · x86_64" — the identity a saved case is about. */
+export function describeCaseTarget(summary: CaseSummary | undefined): string {
+  if (summary === undefined) return "Target not recorded";
+  const parts = [summary.target.name ?? summary.target.path ?? "Unnamed target"];
+  if (summary.target.format !== undefined) parts.push(summary.target.format);
+  if (summary.target.architecture !== undefined) parts.push(summary.target.architecture);
+  return parts.join(" · ");
+}
+
+/** Twelve hex characters are enough to tell two builds apart in a row. */
+export function shortDigest(sha256: string | undefined): string | undefined {
+  if (sha256 === undefined || sha256 === "") return undefined;
+  return sha256.length > 12 ? `${sha256.slice(0, 12)}…` : sha256;
+}
+
+export function describeCaseStats(summary: CaseSummary | undefined): string {
+  if (summary === undefined) return "This folder has no readable report summary.";
+  const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
+  const parts = [plural(summary.turns, "turn"), plural(summary.observations, "observation")];
+  if (summary.evidenceReferences > 0) parts.push(`${plural(summary.evidenceReferences, "evidence reference")}`);
+  return parts.join(" · ");
+}
+
+export function caseDownloadName(name: string): string {
+  return `${name.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
 }

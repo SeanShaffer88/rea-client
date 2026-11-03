@@ -157,6 +157,36 @@ function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ 
       body: { result: { ok: true, path: "/tmp/workspace/evidence/bundle.json", bytes: 8117, records: 2, unknowns: 0 } },
     }),
     "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [], total: 0 } } }),
+    "case.open": ({ name }) => ({
+      body: {
+        result: {
+          ok: true,
+          name,
+          directory: `/tmp/workspace/cases/${String(name)}`,
+          savedAt: "2026-11-02T12:00:00.000Z",
+          files: [
+            { name: "analysis.json", bytes: 1200 },
+            { name: "analysis.md", bytes: 900 },
+            { name: "evidence-bundle.json", bytes: 8117 },
+          ],
+          summary: {
+            schemaVersion: 1,
+            exportedAt: "2026-11-02T12:00:00.000Z",
+            engineVersion: "6.8.0",
+            scope: "binary-core",
+            target: { name: "ls", path: "/usr/bin/ls", format: "elf", architecture: "x86_64", sha256: "ab".repeat(32) },
+            turns: 1,
+            observations: 2,
+            evidenceReferences: 1,
+          },
+          report: "# REA analysis report\n\nThe target is an ELF binary.\n\n## Turn 1",
+          reportTruncated: false,
+          reportJson: JSON.stringify({ schemaVersion: 1, turns: [] }),
+          jsonTruncated: false,
+          bundle: { path: `/tmp/workspace/cases/${String(name)}/evidence-bundle.json`, bytes: 8117, records: 2, unknowns: 0 },
+        },
+      },
+    }),
     "case.save": () => ({
       body: {
         result: {
@@ -444,6 +474,79 @@ describe("App", () => {
     expect(document.querySelector(".field-error")?.textContent).toContain("Start with a letter or digit");
     expect(document.querySelector("#case-name")?.getAttribute("aria-invalid")).toBe("true");
     expect(calls.some((call) => call.method === "case.save")).toBe(false);
+  });
+
+  it("opens a saved case and shows what the folder actually contains", async () => {
+    const saved = {
+      name: "ls-triage",
+      directory: "/tmp/workspace/cases/ls-triage",
+      savedAt: "2026-11-02T12:00:00.000Z",
+      files: [{ name: "analysis.json", bytes: 1200 }, { name: "analysis.md", bytes: 900 }],
+      summary: {
+        schemaVersion: 1,
+        scope: "binary-core",
+        target: { name: "ls", format: "elf", architecture: "x86_64" },
+        turns: 1,
+        observations: 2,
+        evidenceReferences: 1,
+      },
+    };
+    const { calls } = installFetch({
+      "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [saved], total: 1 } } }),
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("case row", () => document.querySelectorAll(".case-row").length === 1);
+    // The list says what the case is about, not just its folder name.
+    expect(document.querySelector(".case-row")?.textContent).toContain("ls · elf · x86_64");
+
+    await act(async () => (document.querySelector(".case-row") as HTMLButtonElement).click());
+    await waitFor("case viewer", () => document.querySelector(".case-summary") !== null);
+    expect(calls.at(-1)).toEqual({ method: "case.open", params: { name: "ls-triage" } });
+    const summary = document.querySelector(".case-summary")?.textContent ?? "";
+    expect(summary).toContain("ls · elf · x86_64");
+    expect(summary).toContain("1 turn · 2 observations · 1 evidence reference");
+    expect(summary).toContain("2 records · 0 unknowns");
+    expect(document.querySelector(".case-doc")?.textContent).toContain("The target is an ELF binary.");
+
+    // The JSON companion is one tab away.
+    await act(async () => (document.querySelectorAll(".case-doc-tabs button")[1] as HTMLButtonElement).click());
+    await waitFor("json tab", () => document.querySelector(".case-doc .code-panel") !== null);
+    expect(document.querySelector(".case-doc")?.textContent).toContain("\"schemaVersion\"");
+  });
+
+  it("explains a case that cannot be read instead of showing an empty report", async () => {
+    const saved = {
+      name: "broken",
+      directory: "/tmp/workspace/cases/broken",
+      savedAt: "2026-11-02T12:00:00.000Z",
+      files: [{ name: "analysis.json", bytes: 12 }],
+    };
+    installFetch({
+      "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [saved], total: 1 } } }),
+      "case.open": ({ name }) => ({
+        body: {
+          result: {
+            ok: false,
+            name,
+            files: [{ name: "analysis.json", bytes: 12 }],
+            error: "analysis.json is not valid JSON, so this case cannot be read.",
+          },
+        },
+      }),
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("case row", () => document.querySelectorAll(".case-row").length === 1);
+    expect(document.querySelector(".case-row")?.textContent).toContain("Summary unavailable");
+
+    await act(async () => (document.querySelector(".case-row") as HTMLButtonElement).click());
+    await waitFor("case error", () => document.querySelector(".modal .error-notice") !== null);
+    expect(document.querySelector(".modal .error-notice")?.textContent).toContain("not valid JSON");
+    expect(document.querySelector(".modal .error-notice")?.textContent).toContain("analysis.json");
+    expect(document.querySelector(".modal .case-doc")).toBeNull();
   });
 
   it("offers to overwrite a case whose folder name is taken", async () => {
