@@ -4230,3 +4230,44 @@ kbd {
 .case-doc .code-panel pre {
   max-height: 40vh;
 }
+
+/* Case search, delete, and actions --------------------------------------- */
+.case-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.case-search .search-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.case-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0 0 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--red-soft);
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.case-warning svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.case-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.modal-actions-spacer {
+  flex: 1;
+}

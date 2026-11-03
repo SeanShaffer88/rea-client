@@ -119,7 +119,12 @@ does not touch a binary or a model.
   the page renders are treated as untrusted input (links and images are removed,
   exactly as in the transcript). A folder whose `analysis.json` is not valid
   JSON, or that has no JSON at all, says so and lists what the folder does
-  contain instead of showing an empty analysis.
+  contain instead of showing an empty analysis. From the viewer the recorded
+  target can be reopened (`target.probe` on the path in the report, with its own
+  honest failure if the file has moved), the JSON can be downloaded, and the case
+  can be deleted — behind an explicit confirmation that names the folder and its
+  files, because the service removes the directory rather than the page. The case
+  list itself has a search box over name, target, scope, and digest.
 - **Diagnostics** — `engine.doctor` verdicts with remediation, reconnection, and
   a live engine event log.
 - **Settings** — read-only model/network/scope configuration, workspace
@@ -127,6 +132,9 @@ does not touch a binary or a model.
 
 ## Security boundaries
 
+- **Deleting a case is bounded to one folder.** `case.delete` resolves the name
+  under the cases root, refuses the root itself and anything that escapes it, and
+  removes recursively only after the page has shown what will go.
 - **Reading a case re-validates the path.** `case.open` resolves the name under
   the cases root, refuses anything that escapes it, and only returns files from a
   directory that exists. Saved report text is shown as untrusted content with
@@ -224,6 +232,11 @@ the field keep the old behaviour.
   is at most 1 MiB it is parsed for a `summary` (target identity, scope, engine
   version, turns, observations, evidence references), so the list says what each
   case is about; an unparseable report simply has no summary.
+- `case.delete { name }` — removes one case folder and nothing else. The name
+  follows the same rule, the resolved directory must be strictly inside the
+  cases root (never the root itself, never a plain file), and a missing case
+  returns `{ ok: false, error }` rather than pretending it succeeded. Confirmation
+  is the page's job; the bridge simply refuses anything that is not a case folder.
 - `case.open { name }` — resolves the folder under the cases root (traversal and
   non-directory targets are refused), then returns the file list, the summary,
   the saved Markdown report, the JSON companion, and the record/unknown counts
@@ -276,7 +289,8 @@ real ELF target (`/usr/bin/ls`):
   unknowns) into `workspace/cases/<name>/`, and `case.list` described it back.
   Saving the same name again was refused with a specific message. `case.open`
   returned the same Markdown and JSON that were written, with the summary and
-  bundle counts read back from the folder.
+  bundle counts read back from the folder, and `case.delete` removed the folder
+  while a sibling file outside it survived.
 - `npm run typecheck`, `npm run typecheck:desktop`, all unit tests, and the
   coverage gate pass.
 
@@ -293,7 +307,7 @@ Automated coverage for the desktop tier:
 | Retained evidence readers | `test/unit/evidenceBundle.test.ts` — summary envelope, text fallback, id filtering, record selection, export result |
 | Evidence display helpers | `test/unit/uiEvidence.test.ts` — id shortening, filtering, honest counts, export summary, conflict detection |
 | Bridge RPC surface | `test/unit/jsonRpcServer.test.ts` — evidence id validation, summary-only listing, single-record reads, workspace-contained exports |
-| Case folders | `test/unit/jsonRpcServer.test.ts` (save/overwrite/name rules, listing, reading back, unreadable folders), `test/unit/desktopCases.test.ts` (report and bundle readers), `test/unit/uiCases.test.ts` (file summaries, target identity, stats, conflict detection), `test/integration/gatewayBridge.test.ts` (real engine process, real REA bundle, read-back), App flows in `uiApp.test.tsx` |
+| Case folders | `test/unit/jsonRpcServer.test.ts` (save/overwrite/name rules, listing, reading back, deletion and its bounds, unreadable folders), `test/unit/desktopCases.test.ts` (report and bundle readers), `test/unit/uiCases.test.ts` (file summaries, target identity, stats, search, delete copy, conflict detection), `test/integration/gatewayBridge.test.ts` (real engine process, real REA bundle, read-back), App flows in `uiApp.test.tsx` |
 | Report export | `test/unit/report.test.ts` — turn pairing, per-target attribution, Markdown fencing, file names |
 | Drop routing | `test/unit/drop.test.ts` — open-in-place vs upload vs reject |
 

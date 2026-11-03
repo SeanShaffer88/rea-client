@@ -9,7 +9,7 @@ import type { ReaClientConfig } from "../config.js";
 import type { EngineBridge } from "./EngineBridge.js";
 import type { Bootstrap, DesktopEvent } from "./protocol.js";
 
-const RPC_METHODS = new Set(["engine.ping", "engine.doctor", "tools.list", "tools.describe", "target.session", "target.open", "target.close", "target.probe", "evidence.list", "evidence.get", "evidence.export", "case.save", "case.list", "case.open", "agent.ask", "agent.cancel", "agent.reset", "agent.transcript"]);
+const RPC_METHODS = new Set(["engine.ping", "engine.doctor", "tools.list", "tools.describe", "target.session", "target.open", "target.close", "target.probe", "evidence.list", "evidence.get", "evidence.export", "case.save", "case.list", "case.open", "case.delete", "agent.ask", "agent.cancel", "agent.reset", "agent.transcript"]);
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon" };
 const MAX_BODY = 1024 * 1024;
 /** RPC bodies carry an analysis report, which is far larger than a control call. */
@@ -169,7 +169,7 @@ export class DesktopGateway {
         }
         // Case reports are the largest payload the page can send; bound them here
         // so an oversized body never reaches the engine's JSON-RPC framing.
-        if (value.method === "case.open" && (typeof params.name !== "string" || !SAFE_CASE_NAME.test(params.name))) {
+        if ((value.method === "case.open" || value.method === "case.delete") && (typeof params.name !== "string" || !SAFE_CASE_NAME.test(params.name))) {
           this.json(response, 400, { error: "A saved case name is required." }); return;
         }
         if (value.method === "case.save") {

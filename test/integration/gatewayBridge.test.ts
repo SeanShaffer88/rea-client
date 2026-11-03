@@ -183,6 +183,13 @@ describe("gateway over the real bridge process", () => {
     expect(opened.reportJson).toBe('{"schemaVersion":1}');
     expect(opened.summary.schemaVersion).toBe(1);
     expect(opened.bundle).toMatchObject({ records: 0, unknowns: 0 });
+
+    // Deleting the case is a real filesystem operation through the same path.
+    const removed = (await call("case.delete", { name: "integration-case" })) as { ok: boolean; name: string };
+    expect(removed).toMatchObject({ ok: true, name: "integration-case" });
+    expect(existsSync(join(saved.directory, "analysis.md"))).toBe(false);
+    const after = (await call("case.list")) as { total: number };
+    expect(after.total).toBe(0);
   }, 40_000);
 
   it("closes the engine child process with the gateway", async () => {

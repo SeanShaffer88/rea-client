@@ -95,3 +95,33 @@ export function describeCaseStats(summary: CaseSummary | undefined): string {
 export function caseDownloadName(name: string): string {
   return `${name.replace(/[^A-Za-z0-9._-]+/g, "-")}.json`;
 }
+
+/** Case-list search: name, target identity, scope, or digest prefix. */
+export function filterSavedCases<T extends { name: string; summary?: CaseSummary }>(
+  cases: ReadonlyArray<T>,
+  query: string,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...cases];
+  return cases.filter((entry) =>
+    [
+      entry.name,
+      entry.summary?.target.name ?? "",
+      entry.summary?.target.path ?? "",
+      entry.summary?.target.format ?? "",
+      entry.summary?.target.architecture ?? "",
+      entry.summary?.target.sha256 ?? "",
+      entry.summary?.scope ?? "",
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle),
+  );
+}
+
+/** Says exactly what a delete will remove, so the confirmation is not vague. */
+export function describeCaseDeletion(name: string, files: ReadonlyArray<{ name: string }>, workspaceDir: string): string {
+  const folder = relativeToWorkspace(`${workspaceDir}/cases/${name}`, workspaceDir);
+  const listed = files.length === 0 ? "the folder" : files.map((file) => file.name).join(", ");
+  return `${folder} will be deleted, along with ${listed}. This cannot be undone.`;
+}
