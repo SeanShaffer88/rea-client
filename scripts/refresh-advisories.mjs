@@ -20,7 +20,7 @@ const url = `${baseUrl}?ecosystem=npm&affects=${encodeURIComponent(pkg)}&per_pag
 const response = await fetch(url, {
   headers: {
     accept: "application/vnd.github+json",
-    "user-agent": "rea-client-advisory-refresh/0.1.0",
+    "user-agent": "rea-client-advisory-refresh/0.2.0",
   },
   signal: AbortSignal.timeout(30_000),
 });

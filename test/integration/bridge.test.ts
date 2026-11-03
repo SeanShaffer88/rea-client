@@ -126,7 +126,7 @@ describe.skipIf(!hasBuild || !hasRea)("rea-client serve — live JSON-RPC 2.0 br
 
       try {
         const ping = await rpc(1, "engine.ping");
-        expect(ping.result).toMatchObject({ ok: true, version: "0.1.0", connected: false });
+        expect(ping.result).toMatchObject({ ok: true, version: "0.2.0", connected: false });
 
         const tools = await rpc(2, "tools.list", { family: "pe" });
         const toolsResult = tools.result as { total: number };

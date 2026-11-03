@@ -11,7 +11,7 @@ function respond(status: number, body: unknown): Response {
   } as unknown as Response;
 }
 
-const SESSION = { token: "first-token", mode: "browser", version: "0.1.0", platform: "linux", config: { toolScope: "binary-core" } };
+const SESSION = { token: "first-token", mode: "browser", version: "0.2.0", platform: "linux", config: { toolScope: "binary-core" } };
 
 afterEach(() => {
   vi.unstubAllGlobals();

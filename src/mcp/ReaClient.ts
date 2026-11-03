@@ -71,7 +71,7 @@ export class ReaClient extends Emitter<ReaClientEvents> implements McpConnection
     this.config = config;
     this.allowNonLoopback = options.allowNonLoopback ?? config.allowNonLoopback;
     this.clientFactory = options.clientFactory ?? (() => new Client(
-      { name: "rea-desktop", version: "0.1.0" },
+      { name: "rea-desktop", version: "0.2.0" },
       { capabilities: {} },
     ));
   }
