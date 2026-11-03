@@ -221,6 +221,43 @@ describe("DesktopGateway", () => {
     expect(bridge.requests.at(-1)?.method).toBe("evidence.export");
   });
 
+  it("forwards case saves within bounds and lists saved cases", async () => {
+    const { port, token, bridge } = await start();
+    const call = async (payload: Record<string, unknown>) =>
+      send(port, "/api/rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-REA-Token": token },
+        body: JSON.stringify(payload),
+      });
+
+    const saved = await call({
+      method: "case.save",
+      params: { report: "# report", reportJson: "{}", includeEvidence: true },
+    });
+    expect(saved.status).toBe(200);
+    expect(bridge.requests.at(-1)).toEqual({
+      method: "case.save",
+      params: { report: "# report", reportJson: "{}", includeEvidence: true },
+    });
+
+    const listed = await call({ method: "case.list" });
+    expect(listed.status).toBe(200);
+    expect(bridge.requests.at(-1)).toEqual({ method: "case.list", params: {} });
+
+    // Reports are the biggest body the page can send; they are bounded at the edge.
+    const before = bridge.requests.length;
+    expect((await call({ method: "case.save", params: { report: 7, reportJson: "{}" } })).status).toBe(400);
+    expect((await call({ method: "case.save", params: { report: "x", reportJson: ["{}"] } })).status).toBe(400);
+    expect((await call({ method: "case.save", params: { report: "x".repeat(2_000_001), reportJson: "{}" } })).status).toBe(400);
+    // Individually acceptable, together too large.
+    expect(
+      (await call({ method: "case.save", params: { report: "x".repeat(1_800_000), reportJson: "y".repeat(1_800_000) } })).status,
+    ).toBe(400);
+    expect((await call({ method: "case.save", params: { report: "x", reportJson: "{}", name: "n".repeat(97) } })).status).toBe(400);
+    expect((await call({ method: "case.save", params: { report: "x", reportJson: "{}", name: 9 } })).status).toBe(400);
+    expect(bridge.requests.length).toBe(before);
+  });
+
   it("replays retained events and enforces the listener cap", async () => {
     const { port, token, bridge } = await start();
     bridge.history = [

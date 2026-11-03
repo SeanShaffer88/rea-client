@@ -99,6 +99,18 @@ does not touch a binary or a model.
   reports what the engine says it wrote (bytes, records, unknowns, path). An
   existing file is never replaced silently: REA's refusal is shown with an
   explicit *Overwrite the existing bundle* action.
+- **Case folders** — *Save case…* opens a small dialog with a name pre-filled
+  from the target and today's date (editable, validated before it is sent) and an
+  *Include REA's evidence bundle* switch. It asks the local service to persist
+  the finished analysis as one folder, `cases/<name>/`, holding `analysis.md`,
+  `analysis.json`, and (when REA can write it) `evidence-bundle.json` produced by
+  REA itself. The browser download is still available, but a case survives a
+  reload, keeps the report next to the canonical evidence, and shows up in the
+  case list on the Evidence page with its files and timestamp. An existing name
+  is never replaced silently; the refusal offers an explicit overwrite. If REA
+  cannot write the bundle the report is still saved, and the reason is shown
+  rather than leaving a file-shaped hole. The dialog states the exact folder and
+  files it will write before anything touches disk.
 - **Diagnostics** — `engine.doctor` verdicts with remediation, reconnection, and
   a live engine event log.
 - **Settings** — read-only model/network/scope configuration, workspace
@@ -106,6 +118,13 @@ does not touch a binary or a model.
 
 ## Security boundaries
 
+- **Cases and evidence are written into the workspace, by the service.**
+  `case.save` and `evidence.export` resolve their own destination, create it
+  `0700`, and reject separators, `..`, and oversized names, so the page can name
+  a case but never a directory. Each RPC body is capped at 4 MiB (1 MiB for
+  other API calls) and the declared `Content-Length` is checked before reading,
+  so an oversized report is answered with `400` instead of resetting the
+  connection.
 - **Evidence exports stay in the workspace.** The bridge, not the page, picks
   the export directory (`<workspaceDir>/evidence/`), rejects any name with a
   path separator, and creates the directory with `0700`. The file itself is
@@ -176,6 +195,19 @@ the field keep the old behaviour.
   `<workspaceDir>/evidence/`, creating it `0700`, then calls
   `export_evidence_bundle` with that absolute path. The renderer cannot choose a
   directory.
+- `case.save { name?, report, reportJson, includeEvidence?, overwrite? }` —
+  writes `<workspaceDir>/cases/<name>/analysis.md` and `analysis.json` (`0700`
+  directory, `0600` files), then has REA write `evidence-bundle.json` into the
+  same folder. The name rule matches evidence exports (letters, digits, `.`,
+  `-`, `_`; ≤80 chars; no separators or `..`), and the resolved path is checked
+  again against the cases root. Documents are capped at 2 000 000 characters
+  each and the two together at 3 000 000. An existing folder returns
+  `{ ok: false, error }` unless `overwrite: true`. The report text travels from
+  the renderer because it carries per-turn target attribution the engine does
+  not keep; the destination and every filename stay with the bridge.
+- `case.list` — reads the cases root and describes only directories that
+  contain both report files, newest first (25 shown, `total` reports the rest).
+  A folder without the reports is not presented as a case.
 - `target.probe` now distinguishes an opened target from an unavailable
   overview: `{ ok: true, overview: null, overviewError: "..." }`. An error string
   is never presented as analysis output.
@@ -215,6 +247,11 @@ real ELF target (`/usr/bin/ls`):
   `workspace/evidence/`, and a second export of the same name returned REA's
   `Evidence file already exists. Choose another path or allow overwrite.`
   unchanged; `overwrite: true` then succeeded.
+- A case folder was saved end to end through the gateway with the **real**
+  `dist/cli.js serve` and the real REA server: `case.save` wrote `analysis.md`,
+  `analysis.json`, and `evidence-bundle.json` (written by REA, 105 bytes, 0
+  unknowns) into `workspace/cases/<name>/`, and `case.list` described it back.
+  Saving the same name again was refused with a specific message.
 - `npm run typecheck`, `npm run typecheck:desktop`, all unit tests, and the
   coverage gate pass.
 
@@ -231,6 +268,7 @@ Automated coverage for the desktop tier:
 | Retained evidence readers | `test/unit/evidenceBundle.test.ts` — summary envelope, text fallback, id filtering, record selection, export result |
 | Evidence display helpers | `test/unit/uiEvidence.test.ts` — id shortening, filtering, honest counts, export summary, conflict detection |
 | Bridge RPC surface | `test/unit/jsonRpcServer.test.ts` — evidence id validation, summary-only listing, single-record reads, workspace-contained exports |
+| Case folders | `test/unit/jsonRpcServer.test.ts` (save/overwrite/name rules, listing, bundle inclusion), `test/unit/uiCases.test.ts` (file summaries, conflict detection), `test/integration/gatewayBridge.test.ts` (real engine process, real REA bundle), Rendered App cases in `uiApp.test.tsx` |
 | Report export | `test/unit/report.test.ts` — turn pairing, per-target attribution, Markdown fencing, file names |
 | Drop routing | `test/unit/drop.test.ts` — open-in-place vs upload vs reject |
 

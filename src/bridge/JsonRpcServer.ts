@@ -12,8 +12,8 @@
  *   - Oversized frames fail closed (`-32700`) before unbounded buffering.
  */
 
-import { mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import type { ReaClientConfig, ToolScopeName } from "../config.js";
 import { runDoctor, type DoctorOptions, type DoctorReport } from "../doctor.js";
 import { AgentSession, createAgentSession } from "../agent/AgentSession.js";
@@ -122,6 +122,10 @@ interface ConnectedState {
 const DEFAULT_MAX_LINE_BYTES = 1_048_576;
 /** Display ceiling for one retained evidence record in the desktop UI. */
 const EVIDENCE_RECORD_MAX_CHARS = 200_000;
+/** Per-document ceiling for a case file the workspace persists. */
+const CASE_DOCUMENT_MAX_CHARS = 2_000_000;
+/** Newest cases offered to the UI; the folder itself may hold more. */
+const CASE_LIST_LIMIT = 25;
 const VALID_SCOPES: readonly ToolScopeName[] = [
   "binary-core",
   "binary-extended",
@@ -462,6 +466,12 @@ export class EngineRpcServer {
 
       case "evidence.export":
         return this.handleEvidenceExport(params);
+
+      case "case.save":
+        return this.handleCaseSave(params);
+
+      case "case.list":
+        return this.handleCaseList();
 
       case "target.session":
         return this.handleTargetSession();
@@ -861,6 +871,163 @@ export class EngineRpcServer {
       return { ok: false, error: projected.text, path };
     }
     return { ok: true, ...exported };
+  }
+
+  /**
+   * A case name is a directory name: bounded, no separators, no traversal. The
+   * same rule is applied to evidence export names so both features reason about
+   * the workspace identically.
+   */
+  private caseName(raw: unknown, fallback: string): string {
+    if (raw !== undefined && typeof raw !== "string") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must be a string when provided.');
+    }
+    const stem = (raw ?? fallback).trim().replace(/\.(json|md)$/i, "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(stem) || stem.includes("..")) {
+      throw new JsonRpcException(
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        '"name" must be 1-80 characters of letters, digits, dot, dash, or underscore.',
+      );
+    }
+    return stem;
+  }
+
+  private caseDocument(raw: unknown, label: string): string {
+    if (typeof raw !== "string" || raw.trim() === "") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, `"${label}" must be a non-empty string.`);
+    }
+    if (raw.length > CASE_DOCUMENT_MAX_CHARS) {
+      throw new JsonRpcException(
+        JSON_RPC_ERRORS.INVALID_PARAMS,
+        `"${label}" exceeds the ${CASE_DOCUMENT_MAX_CHARS}-character limit.`,
+      );
+    }
+    return raw;
+  }
+
+  /**
+   * Persists a finished analysis as a self-contained case folder:
+   * `cases/<name>/analysis.md`, `analysis.json`, and — when the caller asks and
+   * REA can — `evidence-bundle.json` written by REA itself.
+   *
+   * The report text comes from the renderer because it carries per-turn target
+   * attribution the engine does not keep; the bridge owns the destination and
+   * every filename, so a case can never be written outside the workspace.
+   */
+  private async handleCaseSave(params: Record<string, unknown>): Promise<unknown> {
+    const includeEvidence = params["includeEvidence"];
+    if (includeEvidence !== undefined && typeof includeEvidence !== "boolean") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"includeEvidence" must be a boolean when provided.');
+    }
+    const overwrite = params["overwrite"];
+    if (overwrite !== undefined && typeof overwrite !== "boolean") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"overwrite" must be a boolean when provided.');
+    }
+    const markdown = this.caseDocument(params["report"], "report");
+    const json = this.caseDocument(params["reportJson"], "reportJson");
+    const stem = this.caseName(
+      params["name"],
+      `case-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+    );
+
+    const casesRoot = resolve(this.config.workspaceDir, "cases");
+    const directory = resolve(casesRoot, stem);
+    // Belt and braces: the name rule already forbids separators, but a resolved
+    // path is the property that matters, so assert it too.
+    if (directory !== join(casesRoot, stem) || !directory.startsWith(`${casesRoot}${sep}`)) {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must not address a nested directory.');
+    }
+
+    const exists = await stat(directory).then(
+      (info) => info.isDirectory(),
+      () => false,
+    );
+    if (exists && overwrite !== true) {
+      return {
+        ok: false,
+        directory,
+        error: `A case named "${stem}" already exists. Choose another name or allow overwrite.`,
+      };
+    }
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+
+    const files: Array<{ name: string; bytes: number }> = [];
+    const write = async (name: string, content: string): Promise<void> => {
+      await writeFile(join(directory, name), content, { mode: 0o600 });
+      files.push({ name, bytes: Buffer.byteLength(content) });
+    };
+    await write("analysis.md", markdown);
+    await write("analysis.json", json);
+
+    let evidence: Record<string, unknown> | undefined;
+    if (includeEvidence !== false) {
+      const bundlePath = join(directory, "evidence-bundle.json");
+      try {
+        const { connection, catalog } = await this.ensureConnected();
+        this.requireEvidenceTool(catalog, "export_evidence_bundle");
+        const raw = await connection.callTool("export_evidence_bundle", {
+          path: bundlePath,
+          overwrite: true,
+        });
+        const exported = readExportedBundle(raw);
+        if (raw.isError === true || exported === undefined) {
+          evidence = { ok: false, error: projectToolResult(raw, { maxChars: 2_000 }).text };
+        } else {
+          evidence = { ok: true, ...exported };
+          files.push({ name: "evidence-bundle.json", bytes: exported.bytes });
+        }
+      } catch (error) {
+        // The report is the deliverable; a missing bundle is reported, not fatal.
+        evidence = { ok: false, error: (error as Error).message };
+      }
+    }
+
+    return {
+      ok: true,
+      name: stem,
+      directory,
+      files,
+      ...(evidence === undefined ? {} : { evidence }),
+    };
+  }
+
+  /**
+   * Lists saved case folders newest first. Only directories with the two report
+   * files are described as cases, so a stray folder cannot look like one.
+   */
+  private async handleCaseList(): Promise<unknown> {
+    const casesRoot = resolve(this.config.workspaceDir, "cases");
+    const entries = await readdir(casesRoot, { withFileTypes: true }).catch(() => []);
+    const cases: Array<{
+      name: string;
+      directory: string;
+      savedAt: string;
+      files: Array<{ name: string; bytes: number }>;
+    }> = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const directory = join(casesRoot, entry.name);
+      const names = await readdir(directory).catch((): string[] => []);
+      if (!names.includes("analysis.md") || !names.includes("analysis.json")) continue;
+      const files: Array<{ name: string; bytes: number }> = [];
+      let newest = 0;
+      for (const name of names.sort()) {
+        const info = await stat(join(directory, name)).catch(() => undefined);
+        if (info === undefined || !info.isFile()) continue;
+        files.push({ name, bytes: info.size });
+        newest = Math.max(newest, info.mtimeMs);
+      }
+      cases.push({
+        name: entry.name,
+        directory,
+        savedAt: new Date(newest === 0 ? Date.now() : newest).toISOString(),
+        files,
+      });
+    }
+
+    cases.sort((left, right) => right.savedAt.localeCompare(left.savedAt));
+    return { ok: true, casesRoot, cases: cases.slice(0, CASE_LIST_LIMIT), total: cases.length };
   }
 
   private async handleTargetSession(): Promise<unknown> {

@@ -487,93 +487,93 @@ describe("EngineRpcServer — desktop event correlation", () => {
   });
 });
 
-describe("EngineRpcServer — retained evidence", () => {
-  const EVIDENCE_ID = `ev_${"4e8c8fb7".repeat(8)}`;
+const EVIDENCE_ID = `ev_${"4e8c8fb7".repeat(8)}`;
 
-  function evidenceConnection(): FakeConnection {
-    return new FakeConnection(
-      ["open_binary", "close_binary", "binary_session", "get_evidence_bundle", "export_evidence_bundle"].map((name) => tool(name)),
-      (name, args) => {
-        if (name === "binary_session") {
-          return { structuredContent: { result: { open: false, packageVersion: "6.8.0" } } };
-        }
-        if (name === "get_evidence_bundle") {
-          const filters = (args["filters"] ?? {}) as { evidence_id?: string };
-          const requested = filters.evidence_id;
-          if (args["detail"] === "complete") {
-            if (requested !== EVIDENCE_ID) {
-              return { structuredContent: { result: { kind: "evidence-bundle", records: [] } } };
-            }
-            return {
-              structuredContent: {
-                result: {
-                  kind: "evidence-bundle",
-                  records: [
-                    {
-                      evidence_id: EVIDENCE_ID,
-                      operation: "inspect_artifact",
-                      subject: { name: "/usr/bin/ls", digest: { sha256: "aa".repeat(32) }, format: "elf" },
-                      provider: { id: "rea-binary", version: "6.8.0" },
-                      confidence: "high",
-                      authority: "observed",
-                      retention: "session",
-                      limitation_count: 1,
-                      detail: { imports: ["puts"] },
-                    },
-                  ],
-                },
-              },
-            };
+function evidenceConnection(): FakeConnection {
+  return new FakeConnection(
+    ["open_binary", "close_binary", "binary_session", "get_evidence_bundle", "export_evidence_bundle"].map((name) => tool(name)),
+    (name, args) => {
+      if (name === "binary_session") {
+        return { structuredContent: { result: { open: false, packageVersion: "6.8.0" } } };
+      }
+      if (name === "get_evidence_bundle") {
+        const filters = (args["filters"] ?? {}) as { evidence_id?: string };
+        const requested = filters.evidence_id;
+        if (args["detail"] === "complete") {
+          if (requested !== EVIDENCE_ID) {
+            return { structuredContent: { result: { kind: "evidence-bundle", records: [] } } };
           }
-          const matches = requested === undefined || requested === EVIDENCE_ID;
           return {
             structuredContent: {
               result: {
-                kind: "evidence-bundle-summary",
-                total_retained_records: 2,
-                matching_records: requested === undefined ? 2 : matches ? 1 : 0,
-                unknown_revisions: 0,
-                records: matches
-                  ? [
-                      {
-                        evidence_id: EVIDENCE_ID,
-                        subject: { name: "/usr/bin/ls", digest: { sha256: "aa".repeat(32) }, format: "elf" },
-                        provider: { id: "rea-binary" },
-                        operation: "inspect_artifact",
-                        confidence: "high",
-                        authority: "observed",
-                        retention: "session",
-                        limitation_count: 1,
-                      },
-                      ...(requested === undefined
-                        ? [
-                            {
-                              evidence_id: `ev_${"1f".repeat(32)}`,
-                              subject: { name: "/usr/bin/ls", format: "elf" },
-                              provider: { id: "rea-binary" },
-                              operation: "binary_session",
-                            },
-                          ]
-                        : []),
-                    ]
-                  : [],
+                kind: "evidence-bundle",
+                records: [
+                  {
+                    evidence_id: EVIDENCE_ID,
+                    operation: "inspect_artifact",
+                    subject: { name: "/usr/bin/ls", digest: { sha256: "aa".repeat(32) }, format: "elf" },
+                    provider: { id: "rea-binary", version: "6.8.0" },
+                    confidence: "high",
+                    authority: "observed",
+                    retention: "session",
+                    limitation_count: 1,
+                    detail: { imports: ["puts"] },
+                  },
+                ],
               },
             },
           };
         }
-        if (name === "export_evidence_bundle") {
-          const path = String(args["path"] ?? "");
-          // Windows absolute paths are `C:\…`, so ask the platform, not for a slash.
-          if (!isAbsolute(path)) {
-            return { isError: true, content: [{ type: "text", text: "path must be absolute" }] };
-          }
-          return { structuredContent: { result: { path, bytes: 8117, records: 2, unknowns: 0 } } };
+        const matches = requested === undefined || requested === EVIDENCE_ID;
+        return {
+          structuredContent: {
+            result: {
+              kind: "evidence-bundle-summary",
+              total_retained_records: 2,
+              matching_records: requested === undefined ? 2 : matches ? 1 : 0,
+              unknown_revisions: 0,
+              records: matches
+                ? [
+                    {
+                      evidence_id: EVIDENCE_ID,
+                      subject: { name: "/usr/bin/ls", digest: { sha256: "aa".repeat(32) }, format: "elf" },
+                      provider: { id: "rea-binary" },
+                      operation: "inspect_artifact",
+                      confidence: "high",
+                      authority: "observed",
+                      retention: "session",
+                      limitation_count: 1,
+                    },
+                    ...(requested === undefined
+                      ? [
+                          {
+                            evidence_id: `ev_${"1f".repeat(32)}`,
+                            subject: { name: "/usr/bin/ls", format: "elf" },
+                            provider: { id: "rea-binary" },
+                            operation: "binary_session",
+                          },
+                        ]
+                      : []),
+                  ]
+                : [],
+            },
+          },
+        };
+      }
+      if (name === "export_evidence_bundle") {
+        const path = String(args["path"] ?? "");
+        // Windows absolute paths are `C:\…`, so ask the platform, not for a slash.
+        if (!isAbsolute(path)) {
+          return { isError: true, content: [{ type: "text", text: "path must be absolute" }] };
         }
-        return { content: [{ type: "text", text: `ok:${name}` }] };
-      },
-    );
-  }
+        return { structuredContent: { result: { path, bytes: 8117, records: 2, unknowns: 0 } } };
+      }
+      return { content: [{ type: "text", text: `ok:${name}` }] };
+    },
+  );
+}
 
+describe("EngineRpcServer — retained evidence", () => {
   it("lists retained records from the summary and reads one full record", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "rea-evidence-"));
     const harness = new RpcHarness({
@@ -658,6 +658,137 @@ describe("EngineRpcServer — retained evidence", () => {
         overwrite: "yes",
       })) as JsonRpcErrorResponse;
       expect(badOverwrite.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+    } finally {
+      await harness.close();
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("EngineRpcServer — saved cases", () => {
+  it("writes a case folder with the report, the JSON companion, and REA's bundle", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-"));
+    const connection = evidenceConnection();
+    const harness = new RpcHarness({
+      connection,
+      config: { ...DEFAULT_CONFIG, workspaceDir },
+    });
+    try {
+      const saved = (await harness.call("save", "case.save", {
+        name: "ls-triage",
+        report: "# REA analysis report\n\nbody",
+        reportJson: '{"schemaVersion":1}',
+      })) as JsonRpcSuccessResponse;
+      const result = saved.result as {
+        ok: boolean;
+        name: string;
+        directory: string;
+        files: Array<{ name: string; bytes: number }>;
+        evidence: { ok: boolean; records: number };
+      };
+      expect(result.ok).toBe(true);
+      expect(result.name).toBe("ls-triage");
+      expect(result.directory).toBe(join(workspaceDir, "cases", "ls-triage"));
+      expect(result.files.map((file) => file.name)).toEqual([
+        "analysis.md",
+        "analysis.json",
+        "evidence-bundle.json",
+      ]);
+      expect(result.evidence).toMatchObject({ ok: true, records: 2 });
+
+      // The bridge owns every filename, and the engine was pointed inside the case.
+      const bundle = connection.calls.find((entry) => entry.name === "export_evidence_bundle");
+      expect(bundle?.args["path"]).toBe(join(workspaceDir, "cases", "ls-triage", "evidence-bundle.json"));
+      expect(bundle?.args["overwrite"]).toBe(true);
+    } finally {
+      await harness.close();
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to overwrite an existing case unless asked, and can skip the bundle", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-again-"));
+    const connection = evidenceConnection();
+    const harness = new RpcHarness({
+      connection,
+      config: { ...DEFAULT_CONFIG, workspaceDir },
+      // The oversized-report case needs a frame larger than the bridge default.
+      maxLineBytes: 5_000_000,
+    });
+    try {
+      const first = (await harness.call("one", "case.save", {
+        name: "repeat",
+        report: "# one",
+        reportJson: "{}",
+        includeEvidence: false,
+      })) as JsonRpcSuccessResponse;
+      expect((first.result as { files: unknown[] }).files).toHaveLength(2);
+      expect(connection.calls.some((entry) => entry.name === "export_evidence_bundle")).toBe(false);
+
+      const second = (await harness.call("two", "case.save", {
+        name: "repeat",
+        report: "# two",
+        reportJson: "{}",
+        includeEvidence: false,
+      })) as JsonRpcSuccessResponse;
+      expect(second.result).toMatchObject({ ok: false });
+      expect(String((second.result as { error: string }).error)).toContain("already exists");
+
+      const third = (await harness.call("three", "case.save", {
+        name: "repeat",
+        report: "# three",
+        reportJson: "{}",
+        includeEvidence: false,
+        overwrite: true,
+      })) as JsonRpcSuccessResponse;
+      expect(third.result).toMatchObject({ ok: true, name: "repeat" });
+
+      // A refused name, empty report, or oversized document is an argument error.
+      for (const params of [
+        { name: "../escape", report: "x", reportJson: "{}" },
+        { name: "nested/path", report: "x", reportJson: "{}" },
+        { name: "ok", report: "", reportJson: "{}" },
+        { name: "ok", report: "x", reportJson: "" },
+        { name: "ok", report: 5, reportJson: "{}" },
+        { name: "ok", report: "x".repeat(2_000_001), reportJson: "{}" },
+        { name: "ok", report: "x", reportJson: "{}", includeEvidence: "yes" },
+      ]) {
+        const bad = (await harness.call(`bad-${String(Math.random())}`, "case.save", params)) as JsonRpcErrorResponse;
+        expect(bad.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+      }
+    } finally {
+      await harness.close();
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists saved cases newest first and ignores folders that are not cases", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-list-"));
+    const harness = new RpcHarness({ connection: evidenceConnection(), config: { ...DEFAULT_CONFIG, workspaceDir } });
+    try {
+      const empty = (await harness.call("empty", "case.list")) as JsonRpcSuccessResponse;
+      expect(empty.result).toEqual({ ok: true, casesRoot: join(workspaceDir, "cases"), cases: [], total: 0 });
+
+      for (const name of ["older", "newer"]) {
+        await harness.call(name, "case.save", {
+          name,
+          report: `# ${name}`,
+          reportJson: "{}",
+          includeEvidence: false,
+        });
+        // Distinct mtimes keep the ordering assertion meaningful on coarse clocks.
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      const { mkdir: makeDir, writeFile: write } = await import("node:fs/promises");
+      await makeDir(join(workspaceDir, "cases", "not-a-case"), { recursive: true });
+      await write(join(workspaceDir, "cases", "stray.txt"), "ignored");
+
+      const listed = (await harness.call("list", "case.list")) as JsonRpcSuccessResponse;
+      const result = listed.result as { cases: Array<{ name: string; files: Array<{ name: string }>; savedAt: string }>; total: number };
+      expect(result.total).toBe(2);
+      expect(result.cases.map((entry) => entry.name)).toEqual(["newer", "older"]);
+      expect(result.cases[0]?.files.map((file) => file.name)).toEqual(["analysis.json", "analysis.md"]);
+      expect(Date.parse(result.cases[0]!.savedAt)).toBeGreaterThan(Date.parse(result.cases[1]!.savedAt));
     } finally {
       await harness.close();
       await rm(workspaceDir, { recursive: true, force: true });

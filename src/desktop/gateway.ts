@@ -9,9 +9,14 @@ import type { ReaClientConfig } from "../config.js";
 import type { EngineBridge } from "./EngineBridge.js";
 import type { Bootstrap, DesktopEvent } from "./protocol.js";
 
-const RPC_METHODS = new Set(["engine.ping", "engine.doctor", "tools.list", "tools.describe", "target.session", "target.open", "target.close", "target.probe", "evidence.list", "evidence.get", "evidence.export", "agent.ask", "agent.cancel", "agent.reset", "agent.transcript"]);
+const RPC_METHODS = new Set(["engine.ping", "engine.doctor", "tools.list", "tools.describe", "target.session", "target.open", "target.close", "target.probe", "evidence.list", "evidence.get", "evidence.export", "case.save", "case.list", "agent.ask", "agent.cancel", "agent.reset", "agent.transcript"]);
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon" };
 const MAX_BODY = 1024 * 1024;
+/** RPC bodies carry an analysis report, which is far larger than a control call. */
+const MAX_RPC_BODY = 4 * 1024 * 1024;
+/** The two report documents a case may carry, in characters. */
+const MAX_CASE_DOCUMENT = 2_000_000;
+const MAX_CASE_TOTAL = 3_000_000;
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export interface GatewayOptions {
@@ -96,14 +101,20 @@ export class DesktopGateway {
     response.end(JSON.stringify(value));
   }
 
-  private async body(request: IncomingMessage): Promise<Buffer> {
+  private async body(request: IncomingMessage, limit = MAX_BODY): Promise<Buffer> {
     if (!request.headers["content-type"]?.startsWith("application/json")) throw new Error("Expected application/json.");
+    // A declared length over the limit is answered before the body is read, so
+    // the client sees a status instead of a connection reset mid-upload.
+    if (Number(request.headers["content-length"] ?? 0) > limit) {
+      request.resume();
+      throw new Error(`Request exceeds the ${Math.round(limit / 1024)} KiB limit.`);
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       size += buffer.length;
-      if (size > MAX_BODY) throw new Error("Request exceeds the 1 MiB limit.");
+      if (size > limit) throw new Error(`Request exceeds the ${Math.round(limit / 1024)} KiB limit.`);
       chunks.push(buffer);
     }
     return Buffer.concat(chunks);
@@ -138,7 +149,7 @@ export class DesktopGateway {
       if (url.pathname === "/api/events" && request.method === "GET") { this.events(request, response); return; }
       if (url.pathname === "/api/rpc" && request.method === "POST") {
         let value: { method?: unknown; params?: unknown };
-        try { value = JSON.parse((await this.body(request)).toString("utf8")); }
+        try { value = JSON.parse((await this.body(request, MAX_RPC_BODY)).toString("utf8")); }
         catch (error) { this.json(response, 400, { error: (error as Error).message }); return; }
         if (!value || typeof value.method !== "string" || !RPC_METHODS.has(value.method)) { this.json(response, 403, { error: "This engine method is not available to the desktop." }); return; }
         if (value.params !== undefined && (typeof value.params !== "object" || value.params === null || Array.isArray(value.params))) { this.json(response, 400, { error: "RPC params must be an object." }); return; }
@@ -153,6 +164,26 @@ export class DesktopGateway {
         }
         if (value.method === "evidence.get" && (typeof params.evidenceId !== "string" || params.evidenceId.length > 128)) {
           this.json(response, 400, { error: "An evidence id is required." }); return;
+        }
+        // Case reports are the largest payload the page can send; bound them here
+        // so an oversized body never reaches the engine's JSON-RPC framing.
+        if (value.method === "case.save") {
+          const report = params.report;
+          const reportJson = params.reportJson;
+          const tooLarge =
+            typeof report === "string" && typeof reportJson === "string"
+              ? report.length > MAX_CASE_DOCUMENT ||
+                reportJson.length > MAX_CASE_DOCUMENT ||
+                report.length + reportJson.length > MAX_CASE_TOTAL
+              : false;
+          if (
+            (report !== undefined && typeof report !== "string") ||
+            (reportJson !== undefined && typeof reportJson !== "string") ||
+            tooLarge ||
+            (params.name !== undefined && (typeof params.name !== "string" || params.name.length > 96))
+          ) {
+            this.json(response, 400, { error: "A case needs a bounded name and report text." }); return;
+          }
         }
         try {
           const result = await this.options.bridge.request(value.method, params, value.method === "agent.ask" ? 0 : 600_000);
