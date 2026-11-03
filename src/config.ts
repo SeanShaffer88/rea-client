@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NetworkPolicyError, assertLoopbackUrl } from "./platform/net.js";
 
@@ -127,6 +127,11 @@ export function appDataLayout(userDataDir: string): {
     configPath: join(userDataDir, "config.json"),
     workspaceDir: join(userDataDir, "workspace"),
   };
+}
+
+/** Resolve desktop workspace paths beside the config, independent of launch cwd. */
+export function desktopConfig(config: ReaClientConfig, configPath: string): ReaClientConfig {
+  return { ...config, workspaceDir: resolve(dirname(configPath), config.workspaceDir) };
 }
 
 /**

@@ -159,7 +159,9 @@ export class EngineBridge extends EventEmitter {
     const child = this.child;
     if (!child || child.exitCode !== null) return;
     await new Promise<void>((resolvePromise) => {
-      const kill = setTimeout(() => child.kill("SIGKILL"), 2500);
+      // MCP's stdio transport allows two seconds after stdin EOF and two
+      // more after SIGTERM. Let it reap REA before terminating the engine.
+      const kill = setTimeout(() => child.kill("SIGKILL"), 6000);
       child.once("exit", () => { clearTimeout(kill); resolvePromise(); });
       try { child.stdin.write('{"jsonrpc":"2.0","id":0,"method":"engine.shutdown"}\n'); }
       catch { child.kill("SIGTERM"); }

@@ -29,6 +29,7 @@ files:
   - dist-electron/**/*
   - package.json
   - LICENSE
+  - build/offline-manifest.sha256
 
 # dist/ is executed by the CLI child process, node_modules by both the child and
 # the REA server it spawns. dist-desktop and dist-electron are only ever read by
@@ -50,6 +51,7 @@ win:
   artifactName: ${name}-${version}-windows-${arch}-setup.${ext}
 
 nsis:
+  include: build/offline-installer.nsh
   # A per-user install with a choosable directory: no elevation prompt, and the
   # app can write its workspace/config next to the user's other data.
   oneClick: false

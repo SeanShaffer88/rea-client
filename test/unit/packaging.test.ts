@@ -10,10 +10,10 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { appDataLayout, firstRunConfig, parseConfig, unpackedPath } from "../../src/config.js";
+import { appDataLayout, desktopConfig, firstRunConfig, parseConfig, unpackedPath } from "../../src/config.js";
 
 describe("unpackedPath", () => {
   it("moves a packed path to its unpacked sibling on posix and windows", () => {
@@ -36,6 +36,14 @@ describe("unpackedPath", () => {
 });
 
 describe("installed-app layout", () => {
+  it("resolves a custom workspace beside its config regardless of launch directory", () => {
+    const configPath = resolve("custom-settings", "config.json");
+    const original = parseConfig({ workspaceDir: "saved-cases" });
+    expect(desktopConfig(original, configPath).workspaceDir).toBe(resolve("custom-settings", "saved-cases"));
+    expect(original.workspaceDir).toBe("saved-cases");
+    const absolute = resolve("elsewhere", "cases");
+    expect(desktopConfig(parseConfig({ workspaceDir: absolute }), configPath).workspaceDir).toBe(absolute);
+  });
   it("keeps config and workspace under application data, not the install directory", () => {
     const layout = appDataLayout(join("/home/user/.config", "REA Workspace"));
     expect(layout.configPath).toBe(join("/home/user/.config", "REA Workspace", "config.json"));

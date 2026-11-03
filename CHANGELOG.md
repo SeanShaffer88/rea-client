@@ -9,7 +9,37 @@ releases; see [Releasing](#releasing).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- A Windows offline installation kit containing Setup and its adjacent verified
+  dependency payload: portable llama.cpp with CUDA and CPU backends, Qwen3-8B
+  Q4_K_M, Ghidra 12.1.4, Temurin JDK 25, and app-local Microsoft runtime DLLs.
+  Setup and first launch use local files; they do not download dependencies.
+- A native startup status window for bundle verification and local model loading.
+- Hash-anchored payload verification, authenticated loopback model startup,
+  bounded CUDA-to-CPU fallback, and cleanup of owned runtime processes and
+  temporary model credentials.
+
+### Fixed
+
+- Packaged REA child processes retain Electron's required Node-mode flag while
+  preserving the SDK's restricted environment inheritance.
+- Custom desktop workspace paths resolve beside the configuration file and are
+  reused consistently by the gateway, directory creation, and workspace menu.
+- Engine shutdown allows the MCP server's graceful cleanup phases to finish
+  before force termination.
+- Windows security fixtures use native directory junctions to test the same
+  link containment and manifest guarantees without elevated symlink privileges.
+
+### Distribution Status
+
+- The full model exceeds NSIS's 2 GB executable limit; distribute the complete
+  offline ZIP, not the setup executable alone.
+- Publishing is explicitly gated until verified multipart delivery fits
+  GitHub's 2 GiB per-asset limit. No new tag or release is published by this work.
+- Native Windows rendering, the file picker, and packaged REA target opening
+  have been exercised. Full offline installer and live agent validation remains
+  subject to the evidence in `docs/desktop.md`.
 
 ## [0.3.0] — 2026-11-03
 
@@ -169,6 +199,13 @@ that ships on top of them.
   retained bundle is covered by tests rather than by a live capture.
 
 ## Releasing
+
+Release publishing is currently blocked by the offline-distribution gate in
+`release.yml`. Implement and test complete multipart delivery first; never
+publish the setup executable without its required payload. Do not create a tag
+or release before beta testing and the user's explicit approval.
+
+The earlier release procedure, after that gate is resolved and approval is given:
 
 1. Add the `## [x.y.z]` section here and update the version in `package.json`
    and `src/cli.ts`.

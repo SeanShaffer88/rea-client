@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 const rl = createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const result = (id, value) => send({ jsonrpc: "2.0", id, result: value });
+let shutdownDelay = 0;
 
 send({ jsonrpc: "2.0", method: "engine.ready", params: { fixture: true } });
 
@@ -27,7 +28,14 @@ for await (const line of rl) {
     result(id, { ok: true, pid: process.pid, running: true });
   } else if (method === "engine.shutdown") {
     result(id, { ok: true });
+    if (shutdownDelay) {
+      await new Promise((resolve) => setTimeout(resolve, shutdownDelay));
+      send({ jsonrpc: "2.0", method: "shutdown.complete", params: {} });
+    }
     break;
+  } else if (method === "delay-shutdown") {
+    shutdownDelay = 3000;
+    result(id, { ok: true });
   } else if (method === "echo") {
     result(id, { params });
   } else if (method === "notify") {

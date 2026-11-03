@@ -14,6 +14,9 @@ on:
       - 'electron-builder.yml'
       - 'build/**'
       - 'desktop/**'
+      - 'src/desktop/offlineRuntime.ts'
+      - 'scripts/prepare-offline.mjs'
+      - 'scripts/package-offline.mjs'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/installer.yml'
@@ -27,9 +30,9 @@ permissions:
 
 jobs:
   windows:
-    name: Windows installer
+    name: Windows offline installation kit
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
       - name: Check out
@@ -48,6 +51,11 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: npm ci
 
+      # Build-time downloads only: every publisher archive and model is pinned
+      # and verified before extraction. Nothing is downloaded by Setup or the app.
+      - name: Prepare verified offline dependencies
+        run: npm run offline:prepare
+
       # Same order as ci.yml: the CLI the app spawns has to exist before the
       # renderer and the Electron main process are built around it.
       - name: Build engine, UI, and Electron shell
@@ -57,6 +65,11 @@ jobs:
       # the artifact goes is decided by the workflow that called it.
       - name: Package the installer
         run: npx electron-builder --win --publish never
+
+      # NSIS has a 2 GB executable limit. The model alone exceeds it, so Setup
+      # and its verified adjacent payload must always be distributed together.
+      - name: Assemble the offline installation kit
+        run: npm run offline:kit
 
       # A silent success with no .exe is the failure mode this step exists to
       # catch: electron-builder writes its output wherever `directories.output`
@@ -85,12 +98,14 @@ jobs:
           if ($env:CSC_LINK) { 'Build was signed with the configured certificate.' }
           else { 'WARNING: no CSC_LINK secret is configured, so this installer is unsigned.' }
 
-      - name: Upload the installer
+      - name: Upload the complete offline installation kit
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: rea-workspace-windows-installer
+          name: rea-workspace-windows-offline-kit
           path: |
-            release/*-setup.exe
+            release/offline-kit/**
             installer-sha256.txt
+          compression-level: 0
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 30

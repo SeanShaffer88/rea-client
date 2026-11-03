@@ -16,11 +16,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The complete offline kit is larger than GitHub's 2 GiB per-asset limit.
+  # Never publish the app-only setup executable as if it includes the payload.
+  # Remove this gate only after split distribution is implemented and tested;
+  # a tag/release also requires the user's separate explicit approval.
+  offline_distribution_gate:
+    name: Require complete offline release distribution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse incomplete Windows distribution
+        run: |
+          echo '::error::Publishing is disabled: the complete offline kit exceeds GitHub release asset limits. Implement and verify multipart distribution before tagging a release.'
+          exit 1
+
   # The Windows installer is built by its own workflow so it can also be run on
   # demand, and so the POSIX release job stays the one that decides what gets
   # published.
   installer:
     name: Windows installer
+    needs: offline_distribution_gate
     uses: ./.github/workflows/installer.yml
 
   publish:

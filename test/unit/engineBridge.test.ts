@@ -79,6 +79,16 @@ describe("EngineBridge", () => {
     await bridge.close();
     await expect(bridge.request("engine.ping")).rejects.toThrow(/closing/);
   });
+
+  it("allows the MCP shutdown grace period to finish before killing the engine", async () => {
+    const bridge = createBridge();
+    const methods: string[] = [];
+    bridge.on("event", (event: { method: string }) => methods.push(event.method));
+    await bridge.request("delay-shutdown");
+    await bridge.close();
+    expect(methods).toContain("shutdown.complete");
+    expect(bridge.running).toBe(false);
+  });
 });
 
 describe("EngineBridge — spawn failure", () => {

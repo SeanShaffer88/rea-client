@@ -62,9 +62,14 @@ logged.
 node dist/desktop/server.js --config config.example.json --port 5173
 ```
 
-The default config path is `config.json`; `config.example.json` is a working
+For browser and CLI development, the default config path is `config.json`; `config.example.json` is a working
 starting point. The engine is only spawned on the first RPC, so opening the page
-does not touch a binary or a model.
+does not touch a binary or a model. The packaged Windows application instead
+seeds its user configuration under `%APPDATA%\REA Workspace` and automatically
+starts the bundled local model on a fresh installation. An explicitly supplied
+`--config <path>` preserves an external model setup; add `--bundled` to test or
+select the offline runtime with that configuration. A saved custom model endpoint
+is retained rather than replaced silently.
 
 ## What the UI covers
 
@@ -323,23 +328,45 @@ Automated coverage for the desktop tier:
 | Report export | `test/unit/report.test.ts` — turn pairing, per-target attribution, Markdown fencing, file names |
 | Drop routing | `test/unit/drop.test.ts` — open-in-place vs upload vs reject |
 
-Not verified here, and not claimed:
+Windows native checks performed on November 3, 2026:
 
-- **The native Electron window was never launched.** This sandbox has no GUI
-  display, no Electron binary (GitHub release assets are not reachable from it),
-  and no system GTK/NSS libraries. The main/preload code is typechecked,
-  compiled, and packaged, but nothing here has seen the window draw. The
-  installer is likewise built on a GitHub Actions Windows runner rather than
-  installed and run on a real Windows desktop.
+- The packaged Electron window rendered on a real Windows desktop and showed
+  REA 6.8.0 with its live 229-tool inventory.
+- The Open Binary modal opened the native Windows file picker. Automated file
+  selection in that native child dialog was not completed.
+- The packaged gateway and its bundled engine/REA child chain opened
+  `C:\Windows\System32\whoami.exe` and reported x86-64 PE metadata.
+- The selected bundled Qwen model completed a real local HTTP request through
+  llama.cpp's CUDA backend. Real agent turns using both a restricted
+  `binary_session` scope and the default 22-tool `binary-core` scope completed in
+  two iterations with one tool call. The default scope ran at the bundled
+  8,192-token context and correctly reported PE/x86-64 target information.
+- The separate CPU model server completed a real HTTP request at a 512-token
+  smoke-test context. This verifies that backend starts and infers, not CPU
+  performance at the full default context.
+- Ghidra 12.1.4 produced a real binary overview and entry-point pseudocode using
+  the bundled JDK. Ghidra 12.2 was rejected by REA 6.8.0 and is not shipped.
+- The owned model, REA, Java, and decompiler processes were confirmed stopped
+  after the runtime smoke tests.
+- The final Windows source validation passed: desktop build, both typechecks,
+  all 535 tests across 42 files, vendored dependency verification, recorded
+  advisory assessment, and coverage thresholds. V8 coverage measured 88.67%
+  statements, 79.75% branches, 88.51% functions, and 91.68% lines.
+
+Still not verified, and not claimed:
+
+- **The complete offline kit's installation and first launch remain under
+  validation.** Native rendering and packaged engine startup have been observed;
+  this does not establish every installer or bundled-provider path.
 - **Browser uploads were not exercised from a real browser engine.** The
   endpoint was validated with real HTTP requests, and the client explicitly
   turns an aborted/incompatible upload into "open it by path instead" rather
   than a raw stream error.
-- **No screenshot-based visual regression.** CSS is reviewed for layout and
-  responsive breakpoints, but no rendering engine with layout was available.
-- **No live model turn.** There is no `llama-server` in the sandbox, so the
-  conversation, streaming-tool-activity, stop, and in-page evidence-population
-  paths are covered by unit tests and reducer tests rather than a live model.
+- **No automated screenshot-based visual regression.** The native workspace has
+  been viewed, but there is no automated image-comparison suite.
+- **No complete live model-driven UI investigation is claimed yet.** A real
+  bundled-model agent turn has run through the engine; native UI streaming,
+  cancellation, and in-page evidence population still require combined checks.
 - **A populated retained-evidence list was not produced live.** REA retains
   observations per MCP session, and the tools that create them only run during
   an agent turn. The live engine therefore reported an empty bundle; the
@@ -352,19 +379,43 @@ Not verified here, and not claimed:
 | Symptom | Cause and fix |
 | --- | --- |
 | `npm run desktop` fails with "Electron failed to install correctly" | The npm postinstall download was skipped or blocked. Run `node node_modules/electron/install.js`, or set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` and use the browser preview instead. |
-| Electron exits immediately on Linux with a missing `libnss3.so` / `libgtk-3.so` | Install the distribution's Electron runtime dependencies (`libnss3`, `libgtk-3-0`, `libgbm1`, `libasound2`). This sandbox is exactly that situation. |
+| Electron exits immediately on Linux with a missing `libnss3.so` / `libgtk-3.so` | Install the distribution's Electron runtime dependencies (`libnss3`, `libgtk-3-0`, `libgbm1`, `libasound2`). The offline dependency kit targets Windows x64. |
 | The page shows "Could not connect to the local workspace service." | `dist-desktop` is missing or the gateway is not running. Run `npm run build:desktop`, then `npm run desktop:web`. |
 | "This preview requires an access token" | The server was started with `REA_PREVIEW_TOKEN`; open the URL including `?access_token=…` as printed at startup. |
 | "Desktop assets not found. Run npm run build:desktop." | The gateway started before the UI was built; rebuild and restart. |
-| Diagnostics says the local model is unavailable | Start a loopback OpenAI-compatible server (for example `llama-server`) matching `llm.baseUrl` in the config, then press *Run diagnostics*. |
+| Diagnostics says the local model is unavailable | For an external configuration, start the configured loopback model server. For bundled mode, check that the complete offline payload was installed and its verification passed; reinstall from the complete kit if files are missing. |
 
 ## Packaging
 
-`npm run pack:win` builds an NSIS setup executable into `release/`; the same
-configuration produces an AppImage on Linux and a `.dmg` on macOS. The Windows
-build is the one CI produces and attaches to every release
-(`.github/workflows/installer.yml`, called by `release.yml` — and runnable on its
-own, or automatically on pull requests that touch packaging).
+Build the complete Windows installation kit on Windows:
+
+```powershell
+npm run offline:prepare
+npm run pack:win
+npm run offline:kit
+```
+
+`offline:prepare` downloads exact pinned publisher assets at build time, checks
+their SHA-256 hashes before extraction, and records the complete installed file
+inventory. It also extracts pinned app-local Microsoft runtime DLLs and their
+license from Microsoft's official redistributable; no Visual Studio installation
+is required on the build host or the user's PC. `pack:win` builds the NSIS setup executable;
+`offline:kit` assembles `release/offline-kit/` and a ZIP64 offline archive.
+
+Distribute Setup and the adjacent `offline` directory together. NSIS cannot
+embed a model larger than its 2 GB executable limit. Setup validates the payload
+against its compiled manifest hash before installation, copies it into the
+application's resources, and verifies the copied files. No network access is
+needed during installation or first launch. The offline runtime loads only the
+verified installed resources, generates a private per-session model key and
+effective configuration, starts authenticated loopback inference, and cleans up
+its owned process and temporary files on shutdown. CUDA startup falls back to the
+separate CPU backend when necessary.
+
+The Windows installer workflow stages and uploads the **complete** offline kit
+with artifact compression disabled. GitHub release assets are limited to 2 GiB,
+so automatic publishing is explicitly blocked until multipart distribution is
+implemented and tested. No tag or release is created by this change.
 
 What the installer contains:
 
@@ -373,6 +424,9 @@ What the installer contains:
 | Electron runtime 45 | the app shell |
 | `dist/` (engine + CLI), `dist-desktop/` (UI), `dist-electron/` (main + preload) | the product itself |
 | `node_modules/` production tree, including `rea-agents` 6.8.0 | the engine launches REA as a child process; nothing is fetched at install or run time |
+| llama.cpp b12065, Qwen3-8B Q4_K_M, CPU and CUDA runtime DLLs | local inference without Ollama or a separate model download |
+| Ghidra 12.1.4 and Temurin JDK 25 | native decompilation without a separate Ghidra or Java installation |
+| App-local Microsoft runtime DLLs, licenses, and publisher notices | dependencies and redistribution terms travel with the application |
 
 Three decisions in `electron-builder.yml` are load-bearing:
 
@@ -396,5 +450,7 @@ electron-builder signs the build automatically; otherwise the packaging job says
 in its log and in the release notes that the artifact is unsigned.
 
 Still not implemented, and not claimed: a Windows Job Object (or POSIX
-process-group) supervisor around the engine child, code signing, bundled
-Ghidra/JRE or model weights, and notarization for macOS.
+process-group) supervisor around the engine child, code signing, verified
+macOS/Linux offline bundles, and notarization for macOS. Optional proprietary
+providers such as IDA and Hopper are not included. The source project's MIT
+license does not replace the third-party license terms shipped in the payload.
