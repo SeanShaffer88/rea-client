@@ -110,6 +110,11 @@ jobs:
 
       # Re-runs are safe: an existing release is left in place and its assets
       # are replaced, so a failed upload does not require deleting the release.
+      #
+      # Deleting a tag turns its release into a draft, and a first publish that
+      # died between create and upload leaves one too. `gh release view` sees a
+      # draft, so that path would upload the assets and then stop, leaving a
+      # release nobody can find. It is published explicitly instead.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,6 +122,7 @@ jobs:
           set -eu
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release/*.tgz release/SHA256SUMS --clobber
+            gh release edit "$GITHUB_REF_NAME" --draft=false
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "rea-client $GITHUB_REF_NAME" \
