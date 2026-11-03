@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -73,11 +73,17 @@ describe("buildManifest", () => {
   });
 
   it("hashes a symlink by its target string and marks it", async () => {
-    await symlink("dist/index.js", join(root, "link.js"));
+    // Junctions exercise real link handling without requiring Windows symlink privileges.
+    const target = process.platform === "win32" ? join(root, "dist") : "dist/index.js";
+    await symlink(target, join(root, "link.js"), process.platform === "win32" ? "junction" : "file");
     const manifest = await buildManifest(root, meta);
     const link = manifest.files.find((file) => file.path === "link.js");
     expect(link?.link).toBe(true);
-    expect(link?.sha256).toBe(sha256("dist/index.js"));
+    const recordedTarget = process.platform === "win32"
+      ? (await readlink(join(root, "link.js"))).replaceAll("\\", "/")
+      : "dist/index.js";
+    expect(link?.sha256).toBe(sha256(recordedTarget));
+    expect(manifest.files.some((file) => file.path.startsWith("link.js/"))).toBe(false);
   });
 
   it("rejects a path that is not a directory", async () => {
@@ -126,10 +132,12 @@ describe("verifyManifest", () => {
   });
 
   it("detects a retargeted symlink", async () => {
-    await symlink("dist/index.js", join(root, "link.js"));
+    const windows = process.platform === "win32";
+    await symlink(windows ? join(root, "dist") : "dist/index.js", join(root, "link.js"), windows ? "junction" : "file");
     const manifest = await buildManifest(root, meta);
     await rm(join(root, "link.js"));
-    await symlink("package.json", join(root, "link.js"));
+    if (windows) await mkdir(join(root, "other"));
+    await symlink(windows ? join(root, "other") : "package.json", join(root, "link.js"), windows ? "junction" : "file");
 
     const result = await verifyManifest(root, manifest);
     expect(result.ok).toBe(false);

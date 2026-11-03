@@ -142,7 +142,16 @@ export class ReaClient extends Emitter<ReaClientEvents> implements McpConnection
       // Inherit only the SDK's safe allowlist, then apply configured overrides.
       // `getDefaultEnvironment` deliberately excludes the full parent env so the
       // child cannot inherit credentials or proxy settings by accident.
-      env: { ...getDefaultEnvironment(), ...this.config.env },
+      env: {
+        ...getDefaultEnvironment(),
+        // A packaged engine runs under Electron's Node mode. Its REA child
+        // uses the same executable, so preserve this flag without inheriting
+        // the rest of the parent's environment.
+        ...(process.versions.electron && this.config.command === process.execPath
+          ? { ELECTRON_RUN_AS_NODE: "1" }
+          : {}),
+        ...this.config.env,
+      },
       ...(this.config.cwd === undefined ? {} : { cwd: this.config.cwd }),
       stderr: "pipe",
     });

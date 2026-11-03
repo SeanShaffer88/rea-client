@@ -43,6 +43,8 @@
     "desktop:preview": "node dist/desktop/server.js --host 0.0.0.0 --preview --port 5173",
     "pack:dir": "npm run build:desktop && electron-builder --dir --publish never",
     "pack:win": "npm run build:desktop && electron-builder --win --publish never",
+    "offline:prepare": "node scripts/prepare-offline.mjs",
+    "offline:kit": "node scripts/package-offline.mjs",
     "pack:linux": "npm run build:desktop && electron-builder --linux --publish never"
   },
   "dependencies": {

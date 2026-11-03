@@ -6,6 +6,10 @@ coverage/
 
 # Installer output (npm run pack:win / pack:linux)
 release/
+offline/
+.offline-staging/
+build/offline-manifest.sha256
+build/offline-pins.nsh
 *.tsbuildinfo
 
 # Runtime state, not source

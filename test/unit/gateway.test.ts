@@ -148,10 +148,19 @@ describe("DesktopGateway", () => {
     expect((await send(port, "/", { method: "POST" })).status).toBe(405);
     expect((await send(port, "/..%2fsecret.txt")).status).toBe(403);
     // A symlink inside the build output must not become a read primitive.
-    const outside = join(directory, "outside.js");
-    await writeFile(outside, "outside the build output");
-    await symlink(outside, join(staticDir, "linked.js"));
-    expect((await send(port, "/linked.js")).status).toBe(403);
+    if (process.platform === "win32") {
+      // A native junction tests the same canonical-path boundary without elevated privileges.
+      const outside = join(directory, "outside");
+      await mkdir(outside);
+      await writeFile(join(outside, "file.js"), "outside the build output");
+      await symlink(outside, join(staticDir, "linked"), "junction");
+      expect((await send(port, "/linked/file.js")).status).toBe(403);
+    } else {
+      const outside = join(directory, "outside.js");
+      await writeFile(outside, "outside the build output");
+      await symlink(outside, join(staticDir, "linked.js"));
+      expect((await send(port, "/linked.js")).status).toBe(403);
+    }
   });
 
   it("requires the workspace token and an explicit RPC allowlist", async () => {

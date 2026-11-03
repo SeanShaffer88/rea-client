@@ -49,19 +49,20 @@ Node 22 and Node 24:
 | OpenAI-compatible streaming client (SSE, chunk splitting, UTF-8 boundaries, idle timeouts, aborts, non-streamed JSON) | **Tested** over a real TCP socket |
 | CLI exit codes, `--json` output, stream separation | **Tested** by spawning the built CLI as a subprocess |
 | Persistent JSON-RPC 2.0 stdio bridge (`rea-client serve`) | **Unit-tested** in-process and **integration-tested** as a real subprocess |
-| Electron + React desktop workspace (gateway, streaming chat, catalog, evidence, diagnostics, settings) | **Built and exercised** against the live gateway and real REA server, including a streamed turn with a real tool call through the rendered UI. Unit-tested supervisor, gateway, API client, reducer, Electron trust rules, and a jsdom App suite. Native window not launched in the build sandbox — see [Validation status](docs/desktop.md#validation-status) |
+| Electron + React desktop workspace (gateway, streaming chat, catalog, evidence, diagnostics, settings) | **Built and exercised** against the live gateway and real REA server, including scripted-model tool calls through the rendered UI. The packaged native Windows workspace and file picker have also been displayed; see [Validation status](docs/desktop.md#validation-status) |
 | `doctor` verdicts (Node semver range, policy, workspace, MCP, providers, authenticated `/models`) | **Tested** in-process and against the live server |
 | Vendor manifest + offline verification | **Verified** — installed tree matches the published tarball on Linux and Windows (2398 files) |
 | Windows path, UNC air-gap policy, and `file://` canonicalization | **Tested** on both Linux (`path.win32`) and Windows (`windows-latest`) |
-| Windows installer (NSIS setup `.exe`, bundled REA + Electron + UI) | **Built in CI** on `windows-latest` for every release and on packaging PRs; the built `.exe` is attached to each release. Not launched from this sandbox — see [Validation status](docs/desktop.md#validation-status) |
-| Job Object supervisor, bundled model/Ghidra, macOS/Linux installers | **Not built** — see [Scope](#scope) |
+| Windows installer | The previous app-only installer was **built in CI**. The expanded offline kit includes the model and analysis dependencies; its installation checks are recorded in [Validation status](docs/desktop.md#validation-status) |
+| Offline AI and decompilation dependencies | **Built and smoke-tested** — portable llama.cpp, Qwen3-8B, Ghidra, JDK, and app-local Microsoft runtime; see [Validation status](docs/desktop.md#validation-status) |
+| Job Object supervisor, macOS/Linux installers | **Not built** — see [Scope](#scope) |
 
 The model client is exercised against a real HTTP server speaking the OpenAI
 `/v1/chat/completions` protocol, though CI does not bundle a live `llama-server`
 binary or GGUF weights.
 
-Coverage (v8, `npm run test:coverage`): **88% statements, 91% lines, 78%
-branches**, including the desktop bridge and gateway. Thresholds in
+Coverage (v8, `npm run test:coverage`): **88.67% statements, 91.68% lines, 79.75%
+branches**, including the desktop bridge, gateway, and offline runtime. Thresholds in
 `vitest.config.ts` are a ratchet set just below that floor, so a regression
 fails CI.
 
@@ -83,31 +84,44 @@ corrected mapping are in [`docs/rea-integration-notes.md`](docs/rea-integration-
 
 ## Install on Windows
 
-Download **`rea-client-<version>-windows-x64-setup.exe`** from the
-[latest release](https://github.com/SeanShaffer88/rea-client/releases/latest) and
-run it. The installer is per-user (no administrator prompt, no service, no
-scheduled task), installs `REA Workspace` into a directory you choose, and adds
-desktop and Start menu shortcuts. It bundles the Electron runtime, the engine,
-the React workspace UI, and **REA itself** — `rea-agents` 6.8.0 from
-[morluto/rea](https://github.com/morluto/rea) — so the installed app needs no
-network, no Node.js, and no separate REA install.
+The **unreleased offline build** is distributed as
+`rea-client-<version>-windows-x64-offline.zip`. Extract the complete ZIP, then run
+Setup beside its `offline` directory. Keep them together until installation
+finishes: Setup verifies and installs that local payload without downloading
+anything. The model is larger than NSIS's 2 GB executable limit, so the setup
+executable alone is not a complete installer.
+
+The kit includes Electron, the engine, the React workspace, **REA 6.8.0**,
+portable **llama.cpp**, **Qwen3-8B Q4_K_M**, **Ghidra 12.1.4**, **Temurin JDK 25**,
+and the app-local Microsoft runtime DLLs they need. It requires no separate
+Node.js, Ollama, Java, Ghidra, or model installation. CUDA acceleration is tried
+first, with a bundled CPU fallback. The default model uses an 8,192-token
+context. First startup verifies the bundled files and loads the local model;
+the startup window reports the current stage.
+
+Setup is per-user, installs `REA Workspace` into a directory you choose, and
+adds desktop and Start menu shortcuts. No service or scheduled task is created.
+The previous [v0.3.0 release](https://github.com/SeanShaffer88/rea-client/releases/tag/v0.3.0)
+does **not** include this expanded offline payload. A new release has not been
+published; release automation is gated until complete multipart distribution
+fits GitHub's per-asset limit.
 
 The first launch writes a configuration file and creates an empty workspace:
 
 | Path | Contents |
 | --- | --- |
-| `%APPDATA%\REA Workspace\config.json` | model endpoint, tool scope, air-gap policy, workspace location |
-| `%APPDATA%\REA Workspace\workspace\` | saved cases (`cases/<name>/`), evidence bundles |
+| `%APPDATA%\rea-client\config.json` | model endpoint, tool scope, air-gap policy, workspace location |
+| `%APPDATA%\rea-client\workspace\` | saved cases (`cases/<name>/`), evidence bundles |
 
-Both are reached from the app's **File** and **Help** menus. Uninstalling removes
+The directory uses the package identifier `rea-client`, even though the window
+is named `REA Workspace`. Both are reached from the app's **File** and **Help** menus. Uninstalling removes
 the program and leaves that directory alone, so saved cases survive.
 
-Two things the build is honest about: the installer is **not code-signed**, so
-Windows SmartScreen shows an "unknown publisher" warning (choose *More info* →
-*Run anyway*), and REA's optional external providers — Ghidra, IDA, Hopper — are
-not bundled, because they are separate tools you install yourself. What ships is
-REA's own analysis surface; the app reports a provider as unavailable rather than
-pretending otherwise.
+The installer is **not code-signed**, so Windows may report an unknown publisher.
+Ghidra supplies the bundled native decompiler; optional integrations such as IDA
+and Hopper remain external. Their presence in REA's catalog does not mean those
+separate products are installed. Third-party licenses and notices ship with the
+offline payload; the whole kit is not covered solely by this project's MIT license.
 
 ## Quick start
 
@@ -137,8 +151,10 @@ npm run desktop           # native Electron window
 npm run desktop:web       # browser UI on 127.0.0.1:5173
 npm run desktop:preview   # browser UI on 0.0.0.0:5173 (explicit opt-in)
 
-# Installer (output in release/)
-npm run pack:win          # NSIS setup .exe, must run on Windows
+# Complete Windows offline kit (build-time downloads, output in release/)
+npm run offline:prepare   # verify and stage pinned model/runtime/Ghidra/JDK assets
+npm run pack:win          # NSIS setup .exe; requires staged offline payload
+npm run offline:kit       # Setup + payload, and a ZIP64 offline kit
 npm run pack:linux        # AppImage
 npm run pack:dir          # unpacked app directory, no installer
 ```
@@ -231,7 +247,8 @@ state changes pass an allowlisted, token-authenticated HTTP gateway.
 
 Start with [`docs/desktop.md`](docs/desktop.md) for the architecture, security
 boundaries, validation status, and the honest list of what is not verified
-(the native window has not been launched here, and no live model turn was run).
+(the native Windows window and packaged REA startup have been exercised; expanded
+offline-model and Ghidra validation is recorded separately).
 Release history lives in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Library use
@@ -332,18 +349,19 @@ Built here: the engine, its tests, the headless CLI, an Electron/React desktop
 workspace (shared with a browser preview) that drives the real bridge, and the
 Windows installer that ships them together with REA.
 
-Not built here: Windows Job Object supervision, bundled Ghidra/JRE or model
-assets, code signing, and macOS/Linux installers. The packaging configuration
+Not built here: Windows Job Object supervision, code signing, and verified
+macOS/Linux installers. The packaging configuration
 covers those platforms — `npm run pack:linux` and the `mac` target both build —
-but only the Windows `.exe` is produced and verified by CI, because that is the
-one that has been asked for.
+the previous Windows app-only installer was built in CI. The expanded Windows
+offline kit has its own packaging workflow; its current validation evidence is
+recorded below.
 
-The Electron main process is typechecked, compiled, and packaged, but this build
-sandbox has no display, no Electron binary, and no GTK/NSS libraries, so the
-native window has never been launched here; that limitation is recorded in
-[`docs/desktop.md`](docs/desktop.md#validation-status) rather than papered over.
-What CI does prove on every release: the installer is produced from the tagged
-tree, contains the app and a bundled REA, and its checksum is published with it.
+The native packaged Windows workspace has been launched, displayed the live
+229-tool catalog, opened its native file picker, and opened a real PE target
+through the packaged gateway. See
+[`docs/desktop.md`](docs/desktop.md#validation-status) for the scope of those checks.
+The expanded offline kit is an unreleased build; automatic publishing is
+blocked until the full payload can be distributed within GitHub's asset limits.
 The engine's public surface (events, callbacks, config) remains the integration
 point for any other shell.
 
@@ -374,22 +392,15 @@ failed tool calls being returned to the model instead of aborting the turn.
 
 Releases are annotated `v*` tags on `main` with a matching GitHub release; the
 notes are taken from [`CHANGELOG.md`](CHANGELOG.md). The current release is
-**v0.3.0**, the first release that ships a Windows installer.
+**v0.3.0**, the first release that ships a Windows installer. Its installer
+predates the full offline dependency bundle described above.
 
-Publishing is automated by [`release.yml`](.github/workflows/release.yml), which
-runs on the tag rather than on the merge. It re-checks the tree it is about to
-ship (built CLI version against the tag name, vendored-dependency manifest, both
-test projects), packs the npm tarball, and publishes it with a `SHA256SUMS` file
-and the changelog section for that version as the release notes. A tag without a
-matching `## [x.y.z]` changelog entry fails the job instead of publishing empty
-notes. `ci.yml` stays read-only; the write token exists only in that tag job.
-
-To cut a release: merge to `main`, add the changelog section, then
-
-```bash
-git tag -a v0.3.0 -m "rea-client 0.3.0"
-git push origin v0.3.0
-```
+Publishing is currently blocked by an explicit offline-distribution gate in
+[`release.yml`](.github/workflows/release.yml): the kit exceeds GitHub's 2 GiB
+per-asset limit, and an app-only installer must not be published as complete.
+Do not tag a new release until multipart distribution is implemented and tested,
+the project reaches beta testing, and the user explicitly approves the tag and
+release. Passing CI and a merged PR do not authorize a tag or publication.
 
 ## License
 
