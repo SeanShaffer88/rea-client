@@ -1,0 +1,136 @@
+name: Release
+
+# Publishing is driven by the tag, not by a merge: main can be merged to freely,
+# and a release happens exactly when a `v*` tag is pushed onto it.
+on:
+  push:
+    tags: ['v*']
+
+# Write scope lives here and only here. `ci.yml` stays read-only, so a pull
+# request can never reach a token that could create or modify a release.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build, test, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # The tag names a version; the binary reports one. If they disagree the
+      # release would ship something other than what it says it is.
+      - name: Check the tag against the built CLI
+        run: |
+          set -eu
+          built="$(node dist/cli.js --version)"
+          echo "tag: $GITHUB_REF_NAME  cli: $built"
+          test "v$built" = "$GITHUB_REF_NAME"
+
+      # The tag is the last chance to catch a tree that was never actually
+      # tested: tags can be pushed from any commit, not just a merged one.
+      - name: Verify vendored dependency
+        run: node dist/cli.js vendor verify node_modules/rea-agents --manifest vendor/rea-agents.manifest.json
+
+      - name: Test
+        run: npm run test:all
+
+      # `files` in package.json already limits the tarball to dist/ plus the
+      # README and license, so the artifact is exactly what `npm i` would give.
+      - name: Pack
+        run: |
+          set -eu
+          mkdir -p release
+          npm pack --pack-destination release
+          cd release
+          sha256sum ./*.tgz > SHA256SUMS
+          cat SHA256SUMS
+
+      # Notes come from the changelog entry for this version, so the release
+      # text and the repository cannot drift apart. A tag without an entry is a
+      # mistake worth stopping for.
+      - name: Extract release notes
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          python3 - "$version" > release-notes.md <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          lines = text.splitlines()
+
+          start = next(
+              (i for i, line in enumerate(lines) if re.match(rf"^## \[{re.escape(version)}\]", line)),
+              None,
+          )
+          if start is None:
+              raise SystemExit(
+                  f"CHANGELOG.md has no '## [{version}]' section; add one before tagging."
+              )
+          end = next(
+              (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+              len(lines),
+          )
+          body = "\n".join(lines[start + 1 : end]).strip()
+
+          print(f"Install and build from the tarball attached to this release:\n")
+          print("```sh")
+          print("npm install -g ./rea-client-{0}.tgz".format(version))
+          print("rea-client --version")
+          print("```\n")
+          print(body)
+          PY
+          cat release-notes.md
+
+      # Re-runs are safe: an existing release is left in place and its assets
+      # are replaced, so a failed upload does not require deleting the release.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tgz release/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "rea-client $GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --verify-tag \
+              release/*.tgz release/SHA256SUMS
+          fi
+
+      - name: Summarise
+        run: |
+          {
+            echo "### rea-client $GITHUB_REF_NAME"
+            echo
+            echo '```'
+            cat release/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

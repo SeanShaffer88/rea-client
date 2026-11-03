@@ -30,7 +30,15 @@ import {
 } from "../mcp/evidenceBundle.js";
 import { ReaClient, type McpConnection } from "../mcp/ReaClient.js";
 import { readBinarySession } from "../mcp/session.js";
-import { readBundleCounts, readCaseSummary } from "../desktop/cases.js";
+import {
+  CaseStoreError,
+  deleteCase,
+  listCases,
+  normalizeCaseName,
+  openCase,
+  saveCase,
+  withFile,
+} from "../cases/store.js";
 import type { BinarySessionSummary } from "../mcp/types.js";
 import { canonicalizeTargetPath, TargetPathError, type PathPlatform } from "../platform/paths.js";
 
@@ -123,14 +131,6 @@ interface ConnectedState {
 const DEFAULT_MAX_LINE_BYTES = 1_048_576;
 /** Display ceiling for one retained evidence record in the desktop UI. */
 const EVIDENCE_RECORD_MAX_CHARS = 200_000;
-/** Per-document ceiling for a case file the workspace persists. */
-const CASE_DOCUMENT_MAX_CHARS = 2_000_000;
-/** Newest cases offered to the UI; the folder itself may hold more. */
-const CASE_LIST_LIMIT = 25;
-/** A saved report larger than this is not parsed for a one-line summary. */
-const CASE_SUMMARY_MAX_BYTES = 1_048_576;
-/** A saved report larger than this is not returned to the page in full. */
-const CASE_REPORT_MAX_CHARS = 4_000_000;
 const VALID_SCOPES: readonly ToolScopeName[] = [
   "binary-core",
   "binary-extended",
@@ -884,108 +884,55 @@ export class EngineRpcServer {
     return { ok: true, ...exported };
   }
 
-  /**
-   * A case name is a directory name: bounded, no separators, no traversal. The
-   * same rule is applied to evidence export names so both features reason about
-   * the workspace identically.
-   */
-  private caseName(raw: unknown, fallback: string): string {
-    if (raw !== undefined && typeof raw !== "string") {
-      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must be a string when provided.');
-    }
-    const stem = (raw ?? fallback).trim().replace(/\.(json|md)$/i, "");
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(stem) || stem.includes("..")) {
-      throw new JsonRpcException(
-        JSON_RPC_ERRORS.INVALID_PARAMS,
-        '"name" must be 1-80 characters of letters, digits, dot, dash, or underscore.',
-      );
-    }
-    return stem;
-  }
-
-  private caseDocument(raw: unknown, label: string): string {
-    if (typeof raw !== "string" || raw.trim() === "") {
-      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, `"${label}" must be a non-empty string.`);
-    }
-    if (raw.length > CASE_DOCUMENT_MAX_CHARS) {
-      throw new JsonRpcException(
-        JSON_RPC_ERRORS.INVALID_PARAMS,
-        `"${label}" exceeds the ${CASE_DOCUMENT_MAX_CHARS}-character limit.`,
-      );
-    }
-    return raw;
+  /** Maps the shared store's input errors onto JSON-RPC parameter errors. */
+  private caseCall<T>(operation: () => Promise<T>): Promise<T> {
+    return operation().catch((error: unknown) => {
+      if (error instanceof CaseStoreError) {
+        throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, error.message);
+      }
+      throw error;
+    });
   }
 
   /**
-   * Persists a finished analysis as a self-contained case folder:
-   * `cases/<name>/analysis.md`, `analysis.json`, and — when the caller asks and
-   * REA can — `evidence-bundle.json` written by REA itself.
+   * Persists a finished analysis as a self-contained case folder.
    *
    * The report text comes from the renderer because it carries per-turn target
-   * attribution the engine does not keep; the bridge owns the destination and
+   * attribution the engine does not keep; the store owns the destination and
    * every filename, so a case can never be written outside the workspace.
    */
   private async handleCaseSave(params: Record<string, unknown>): Promise<unknown> {
-    const includeEvidence = params["includeEvidence"];
-    if (includeEvidence !== undefined && typeof includeEvidence !== "boolean") {
-      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"includeEvidence" must be a boolean when provided.');
+    for (const flag of ["includeEvidence", "overwrite"] as const) {
+      if (params[flag] !== undefined && typeof params[flag] !== "boolean") {
+        throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, `"${flag}" must be a boolean when provided.`);
+      }
     }
-    const overwrite = params["overwrite"];
-    if (overwrite !== undefined && typeof overwrite !== "boolean") {
-      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"overwrite" must be a boolean when provided.');
-    }
-    const markdown = this.caseDocument(params["report"], "report");
-    const json = this.caseDocument(params["reportJson"], "reportJson");
-    const stem = this.caseName(
-      params["name"],
-      `case-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+
+    const saved = await this.caseCall(() =>
+      saveCase({
+        workspaceDir: this.config.workspaceDir,
+        name: params["name"],
+        markdown: params["report"],
+        json: params["reportJson"],
+        overwrite: params["overwrite"] === true,
+      }),
     );
+    if (!saved.ok) return saved;
 
-    const casesRoot = resolve(this.config.workspaceDir, "cases");
-    const directory = resolve(casesRoot, stem);
-    // Belt and braces: the name rule already forbids separators, but a resolved
-    // path is the property that matters, so assert it too.
-    if (directory !== join(casesRoot, stem) || !directory.startsWith(`${casesRoot}${sep}`)) {
-      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must not address a nested directory.');
-    }
-
-    const exists = await stat(directory).then(
-      (info) => info.isDirectory(),
-      () => false,
-    );
-    if (exists && overwrite !== true) {
-      return {
-        ok: false,
-        directory,
-        error: `A case named "${stem}" already exists. Choose another name or allow overwrite.`,
-      };
-    }
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-
-    const files: Array<{ name: string; bytes: number }> = [];
-    const write = async (name: string, content: string): Promise<void> => {
-      await writeFile(join(directory, name), content, { mode: 0o600 });
-      files.push({ name, bytes: Buffer.byteLength(content) });
-    };
-    await write("analysis.md", markdown);
-    await write("analysis.json", json);
-
+    let files = saved.files;
     let evidence: Record<string, unknown> | undefined;
-    if (includeEvidence !== false) {
-      const bundlePath = join(directory, "evidence-bundle.json");
+    if (params["includeEvidence"] !== false) {
+      const bundlePath = join(saved.directory, "evidence-bundle.json");
       try {
         const { connection, catalog } = await this.ensureConnected();
         this.requireEvidenceTool(catalog, "export_evidence_bundle");
-        const raw = await connection.callTool("export_evidence_bundle", {
-          path: bundlePath,
-          overwrite: true,
-        });
+        const raw = await connection.callTool("export_evidence_bundle", { path: bundlePath, overwrite: true });
         const exported = readExportedBundle(raw);
         if (raw.isError === true || exported === undefined) {
           evidence = { ok: false, error: projectToolResult(raw, { maxChars: 2_000 }).text };
         } else {
           evidence = { ok: true, ...exported };
-          files.push({ name: "evidence-bundle.json", bytes: exported.bytes });
+          files = withFile(files, "evidence-bundle.json", exported.bytes);
         }
       } catch (error) {
         // The report is the deliverable; a missing bundle is reported, not fatal.
@@ -993,169 +940,30 @@ export class EngineRpcServer {
       }
     }
 
-    return {
-      ok: true,
-      name: stem,
-      directory,
-      files,
-      ...(evidence === undefined ? {} : { evidence }),
-    };
+    return { ...saved, files, ...(evidence === undefined ? {} : { evidence }) };
   }
 
-  /** Resolves an existing case folder, refusing anything outside the cases root. */
-  private async resolveCaseDirectory(name: string): Promise<string | undefined> {
-    const casesRoot = resolve(this.config.workspaceDir, "cases");
-    const directory = resolve(casesRoot, name);
-    if (!directory.startsWith(`${casesRoot}${sep}`)) return undefined;
-    const info = await stat(directory).catch(() => undefined);
-    return info?.isDirectory() === true ? directory : undefined;
-  }
-
-  private async caseFiles(directory: string): Promise<Array<{ name: string; bytes: number }>> {
-    const names = await readdir(directory).catch((): string[] => []);
-    const files: Array<{ name: string; bytes: number }> = [];
-    for (const name of names.sort()) {
-      const info = await stat(join(directory, name)).catch(() => undefined);
-      if (info === undefined || !info.isFile()) continue;
-      files.push({ name, bytes: info.size });
-    }
-    return files;
-  }
-
-  /**
-   * Lists saved case folders newest first. Only directories with the two report
-   * files are described as cases, so a stray folder cannot look like one. Where
-   * the report is small enough to read, its target and turn counts are included
-   * so the list says what each case is about instead of only its name.
-   */
   private async handleCaseList(): Promise<unknown> {
-    const casesRoot = resolve(this.config.workspaceDir, "cases");
-    const entries = await readdir(casesRoot, { withFileTypes: true }).catch(() => []);
-    const cases: Array<{
-      name: string;
-      directory: string;
-      savedAt: string;
-      files: Array<{ name: string; bytes: number }>;
-      summary?: ReturnType<typeof readCaseSummary>;
-    }> = [];
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const directory = join(casesRoot, entry.name);
-      const files = await this.caseFiles(directory);
-      if (!files.some((file) => file.name === "analysis.json")) continue;
-      if (!files.some((file) => file.name === "analysis.md")) continue;
-
-      const reportFile = files.find((file) => file.name === "analysis.json");
-      const report =
-        reportFile !== undefined && reportFile.bytes <= CASE_SUMMARY_MAX_BYTES
-          ? readCaseSummary(await readFile(join(directory, "analysis.json"), "utf8").catch(() => ""))
-          : undefined;
-
-      cases.push({
-        name: entry.name,
-        directory,
-        savedAt: new Date((await stat(directory).catch(() => undefined))?.mtimeMs ?? Date.now()).toISOString(),
-        files,
-        ...(report === undefined ? {} : { summary: report }),
-      });
-    }
-
-    cases.sort((left, right) => right.savedAt.localeCompare(left.savedAt));
-    return { ok: true, casesRoot, cases: cases.slice(0, CASE_LIST_LIMIT), total: cases.length };
+    const listed = await listCases(this.config.workspaceDir);
+    return { ok: true, ...listed };
   }
 
-  /**
-   * Reads a saved case back: the Markdown report, the JSON companion, and the
-   * counts from REA's bundle if one was written. Nothing here re-runs analysis;
-   * it shows what the folder actually contains.
-   */
   private async handleCaseOpen(params: Record<string, unknown>): Promise<unknown> {
-    const name = this.caseName(params["name"], "");
+    const name = await this.caseCall(async () => normalizeCaseName(params["name"], ""));
     if (name === "") {
       throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" is required.');
     }
-    const directory = await this.resolveCaseDirectory(name);
-    if (directory === undefined) {
-      return { ok: false, name, files: [], error: `No saved case named "${name}" in this workspace.` };
-    }
-
-    const files = await this.caseFiles(directory);
-    if (!files.some((file) => file.name === "analysis.json")) {
-      return { ok: false, name, directory, files, error: "This folder has no analysis.json, so it is not a readable case." };
-    }
-
-    const readText = async (file: string): Promise<string | undefined> =>
-      await readFile(join(directory, file), "utf8").catch(() => undefined);
-    const reportJson = await readText("analysis.json");
-    if (reportJson === undefined) {
-      return { ok: false, name, directory, files, error: "analysis.json could not be read." };
-    }
-    const summary = readCaseSummary(reportJson);
-    if (summary === undefined) {
-      return { ok: false, name, directory, files, error: "analysis.json is not valid JSON, so this case cannot be read." };
-    }
-    const report = await readText("analysis.md");
-    const truncated = report !== undefined && report.length > CASE_REPORT_MAX_CHARS;
-
-    const bundleFile = files.find((file) => file.name === "evidence-bundle.json");
-    const bundle =
-      bundleFile === undefined
-        ? undefined
-        : {
-          path: join(directory, "evidence-bundle.json"),
-          bytes: bundleFile.bytes,
-          ...(readBundleCounts(await readText("evidence-bundle.json") ?? "") ?? {}),
-        };
-
-    const savedAt = new Date((await stat(directory).catch(() => undefined))?.mtimeMs ?? Date.now()).toISOString();
-    return {
-      ok: true,
-      name,
-      directory,
-      savedAt,
-      files,
-      summary,
-      ...(report === undefined ? {} : { report: truncated ? report.slice(0, CASE_REPORT_MAX_CHARS) : report }),
-      reportTruncated: truncated,
-      reportJson: reportJson.length > CASE_REPORT_MAX_CHARS ? reportJson.slice(0, CASE_REPORT_MAX_CHARS) : reportJson,
-      jsonTruncated: reportJson.length > CASE_REPORT_MAX_CHARS,
-      ...(bundle === undefined ? {} : { bundle }),
-    };
+    return await openCase(this.config.workspaceDir, name);
   }
 
-  /**
-   * Removes a saved case folder.
-   *
-   * Destructive and irreversible, so it only ever touches one directory that is
-   * strictly inside `<workspaceDir>/cases`, never the root itself, and never a
-   * path that is not a directory. The caller must confirm in the UI; the bridge
-   * re-checks the name rather than trusting that.
-   */
   private async handleCaseDelete(params: Record<string, unknown>): Promise<unknown> {
-    const name = this.caseName(params["name"], "");
+    const name = await this.caseCall(async () => normalizeCaseName(params["name"], ""));
     if (name === "") {
       throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" is required.');
     }
-    const directory = await this.resolveCaseDirectory(name);
-    if (directory === undefined) {
-      return { ok: false, name, error: `No saved case named "${name}" in this workspace.` };
-    }
-    // `resolveCaseDirectory` already proves containment and directory-ness; this
-    // covers the case where the name is the root itself (e.g. "." would fail the
-    // name rule, but the guard is cheap and states the invariant).
-    const casesRoot = resolve(this.config.workspaceDir, "cases");
-    if (directory === casesRoot || !directory.startsWith(`${casesRoot}${sep}`)) {
-      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must address a case folder.');
-    }
-
-    try {
-      await rm(directory, { recursive: true, force: false, maxRetries: 2 });
-    } catch (error) {
-      return { ok: false, name, directory, error: `The case folder could not be removed: ${(error as Error).message}` };
-    }
-    return { ok: true, name, directory };
+    return await deleteCase(this.config.workspaceDir, name);
   }
+
 
   private async handleTargetSession(): Promise<unknown> {
     const session = await this.refreshSessionState();

@@ -126,8 +126,34 @@ endpoints, tool scopes, or air-gap policies.
 | `vendor manifest` | Record a hash manifest for a vendored dependency, anchored to the published tarball |
 | `vendor verify` | Check a vendored tree against its manifest, offline |
 | `vendor advisories` | Resolve advisories against every installed copy of a dependency and judge reachability |
+| `case list \| show \| save \| delete` | Read and write the case folders the desktop app saves, without opening the app |
+| `evidence export [<case>]` | Ask REA to write its evidence bundle, into a case folder or a path inside the workspace |
 
 All one-shot commands accept `--json`.
+
+Cases are the one thing both front ends share, so the CLI is a complete
+counterpart: `rea-client case show ls-triage` prints the report the desktop app
+saved, and `rea-client case save` produces a folder the app will list.
+
+```bash
+# Store a finished analysis, with REA's bundle next to it.
+rea-client case save ls-triage --report analysis.md --json-report analysis.json --with-evidence
+
+# Read it back, or hand the Markdown to something else.
+rea-client case show ls-triage
+rea-client case show ls-triage --report copy.md
+
+# Refresh only the bundle for a case that already exists.
+rea-client evidence export ls-triage
+
+# Everything the app shows in its case list, as JSON.
+rea-client case list --json
+```
+
+`--workspace <dir>` points every case and evidence command at a different
+workspace root, which is how the test suite exercises them. `case list`,
+`case show`, `case delete`, and `case save` without `--with-evidence` need no
+engine: only `--with-evidence` and `evidence export` start REA.
 
 ## Desktop bridge (`rea-client serve`)
 
@@ -308,6 +334,21 @@ failed tool calls being returned to the model instead of aborting the turn.
 Releases are annotated `v*` tags on `main` with a matching GitHub release; the
 notes are taken from [`CHANGELOG.md`](CHANGELOG.md). The current release is
 **v0.1.0**, the first tag of the engine, CLI, and desktop workspace.
+
+Publishing is automated by [`release.yml`](.github/workflows/release.yml), which
+runs on the tag rather than on the merge. It re-checks the tree it is about to
+ship (built CLI version against the tag name, vendored-dependency manifest, both
+test projects), packs the npm tarball, and publishes it with a `SHA256SUMS` file
+and the changelog section for that version as the release notes. A tag without a
+matching `## [x.y.z]` changelog entry fails the job instead of publishing empty
+notes. `ci.yml` stays read-only; the write token exists only in that tag job.
+
+To cut a release: merge to `main`, add the changelog section, then
+
+```bash
+git tag -a v0.2.0 -m "rea-client 0.2.0"
+git push origin v0.2.0
+```
 
 ## License
 

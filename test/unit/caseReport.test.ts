@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readBundleCounts, readCaseSummary } from "../../src/desktop/cases.js";
+import { readBundleCounts, readCaseSummary } from "../../src/cases/report.js";
 
 const REPORT = {
   schemaVersion: 1,

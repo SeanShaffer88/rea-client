@@ -125,6 +125,14 @@ does not touch a binary or a model.
   can be deleted — behind an explicit confirmation that names the folder and its
   files, because the service removes the directory rather than the page. The case
   list itself has a search box over name, target, scope, and digest.
+- **Cases without the app** — the same folders are readable and writable from
+  the headless CLI (`rea-client case list|show|save|delete`,
+  `rea-client evidence export <case>`). Both front ends call
+  `src/cases/store.ts`, so the name rules, the `0700`/`0600` modes, the refusal to
+  replace an existing case without `--overwrite`, and the path containment checks
+  are the same code rather than two implementations that happen to agree.
+  A case saved after an `ask` run in the terminal therefore appears in the app's
+  case list, and a case the app saved opens with `rea-client case show <name>`.
 - **Diagnostics** — `engine.doctor` verdicts with remediation, reconnection, and
   a live engine event log.
 - **Settings** — read-only model/network/scope configuration, workspace
@@ -139,6 +147,10 @@ does not touch a binary or a model.
   the cases root, refuses anything that escapes it, and only returns files from a
   directory that exists. Saved report text is shown as untrusted content with
   navigation stripped.
+- **The CLI applies the same rules to the same folders.** `case save` refuses a
+  companion that is not a JSON object and never replaces an existing case without
+  `--overwrite`; `evidence export --out` refuses any path that is not inside the
+  workspace, and a case name is always resolved under the cases root.
 - **Cases and evidence are written into the workspace, by the service.**
   `case.save` and `evidence.export` resolve their own destination, create it
   `0700`, and reject separators, `..`, and oversized names, so the page can name

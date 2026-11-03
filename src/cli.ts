@@ -14,7 +14,7 @@
  * stack can be validated independently of inference.
  */
 
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import {
   ConfigError,
@@ -46,6 +46,20 @@ import {
   readPackageIdentity,
 } from "./packaging/registry.js";
 import { EngineRpcServer } from "./bridge/JsonRpcServer.js";
+import {
+  CaseStoreError,
+  casesRoot,
+  deleteCase,
+  listCases,
+  normalizeCaseName,
+  openCase,
+  resolveCaseDirectory,
+  saveCase,
+  withFile,
+  type CaseFile,
+} from "./cases/store.js";
+import type { CaseSummary } from "./cases/report.js";
+import { readExportedBundle } from "./mcp/evidenceBundle.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const CLI_VERSION = "0.1.0";
@@ -67,6 +81,12 @@ Usage:
   rea-client vendor manifest <dir> [--out <file>] [--registry <url>] [--json]
   rea-client vendor verify <dir> --manifest <file> [--json]
   rea-client vendor advisories [<package>] [--deny <severity>] [--advisories <file>] [--json]
+  rea-client case list   [--workspace <dir>] [--json]
+  rea-client case show   <name> [--workspace <dir>] [--json] [--report <file>]
+  rea-client case save   <name> --report <file> --json-report <file>
+                         [--workspace <dir>] [--overwrite] [--with-evidence] [--json]
+  rea-client case delete <name> [--workspace <dir>] [--json]
+  rea-client evidence export [<case>] [--out <path>] [--workspace <dir>] [--overwrite] [--json]
 
 Options:
   --config <path>   config.json to load (default: ./config.json)
@@ -83,6 +103,12 @@ Options:
   --accept <file>    vendor advisories: findings already reviewed and accepted
   --advisories <f>   vendor advisories: read advisory JSON offline instead of querying
                      (REA_ADVISORY_API overrides the advisory service URL)
+  --workspace <dir> case/evidence: workspace root (default: "workspaceDir" from config)
+  --report <file>   case save: Markdown report to store ("-" reads stdin)
+                    case show: write the stored report to this file
+  --json-report <f> case save: analysis JSON to store ("-" reads stdin)
+  --with-evidence   case save: also export REA's evidence bundle into the case
+  --overwrite       case save / evidence export: replace an existing folder or bundle
   --version, -v     print version
   --help, -h        show this help
 
@@ -133,6 +159,11 @@ async function main(argv: readonly string[]): Promise<number> {
         advisories: { type: "string" },
         "allow-undetermined": { type: "boolean", default: false },
         accept: { type: "string" },
+        workspace: { type: "string" },
+        report: { type: "string" },
+        "json-report": { type: "string" },
+        "with-evidence": { type: "boolean", default: false },
+        overwrite: { type: "boolean", default: false },
         version: { type: "boolean", short: "v", default: false },
         help: { type: "boolean", short: "h", default: false },
       },
@@ -156,6 +187,11 @@ async function main(argv: readonly string[]): Promise<number> {
     advisories?: string;
     "allow-undetermined"?: boolean;
     accept?: string;
+    workspace?: string;
+    report?: string;
+    "json-report"?: string;
+    "with-evidence"?: boolean;
+    overwrite?: boolean;
     version?: boolean;
     help?: boolean;
   };
@@ -205,6 +241,26 @@ async function main(argv: readonly string[]): Promise<number> {
         advisories: values.advisories,
         allowUndetermined: values["allow-undetermined"] === true,
         accept: values.accept,
+      });
+    case "case":
+      return commandCase(positionals.slice(1), config, {
+        json: values.json === true,
+        workspace: values.workspace,
+        report: values.report,
+        jsonReport: values["json-report"],
+        overwrite: values.overwrite === true,
+        withEvidence: values["with-evidence"] === true,
+        out: values.out,
+      });
+    case "evidence":
+      return commandEvidence(positionals.slice(1), config, {
+        json: values.json === true,
+        workspace: values.workspace,
+        report: values.report,
+        jsonReport: values["json-report"],
+        overwrite: values.overwrite === true,
+        withEvidence: values["with-evidence"] === true,
+        out: values.out,
       });
     default:
       process.stderr.write(`Unknown command: ${command}\n\n${USAGE}`);
@@ -579,6 +635,402 @@ function isInside(directory: string, candidate: string): boolean {
     !relativeTo.startsWith(`..${sep}`) &&
     !isAbsolute(relativeTo)
   );
+}
+
+const CASE_USAGE = `usage:
+  rea-client case list   [--workspace <dir>] [--json]
+  rea-client case show   <name> [--workspace <dir>] [--json] [--report <file>]
+  rea-client case save   <name> --report <file> --json-report <file>
+                         [--workspace <dir>] [--overwrite] [--with-evidence] [--json]
+  rea-client case delete <name> [--workspace <dir>] [--json]
+  rea-client evidence export [<case>] [--out <path>] [--workspace <dir>] [--overwrite] [--json]
+`;
+
+interface CaseOptions {
+  readonly json: boolean;
+  readonly workspace: string | undefined;
+  readonly report: string | undefined;
+  readonly jsonReport: string | undefined;
+  readonly overwrite: boolean;
+  readonly withEvidence: boolean;
+  readonly out: string | undefined;
+}
+
+type BundleExport =
+  | {
+    readonly ok: true;
+    readonly path: string;
+    readonly bytes: number;
+    readonly records: number;
+    readonly unknowns: number;
+  }
+  | { readonly ok: false; readonly path?: string; readonly error: string };
+
+function writeJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Reads a `--report`/`--json-report` argument, where `-` means stdin. */
+async function readInput(path: string, label: string): Promise<string | undefined> {
+  try {
+    return path === "-" ? await readStdin() : await readFile(path, "utf8");
+  } catch (error) {
+    process.stderr.write(`${label}: could not read ${path}: ${(error as Error).message}\n`);
+    return undefined;
+  }
+}
+
+function describeSummary(summary: CaseSummary): string {
+  const target = summary.target.name ?? summary.target.path ?? "unknown target";
+  const details = [summary.target.format, summary.target.architecture].filter(
+    (value): value is string => value !== undefined,
+  );
+  return (
+    `${target}${details.length > 0 ? ` (${details.join(", ")})` : ""}` +
+    ` — ${summary.turns} turn(s), ${summary.observations} observation(s)` +
+    `${summary.evidenceReferences > 0 ? `, ${summary.evidenceReferences} evidence ref(s)` : ""}`
+  );
+}
+
+function describeFiles(files: readonly CaseFile[]): string {
+  return files.length === 0
+    ? "none"
+    : files.map((file) => `${file.name} (${formatBytes(file.bytes)})`).join(", ");
+}
+
+/**
+ * Case commands work on the same folder the desktop bridge writes, through the
+ * same module, so `rea-client case show` can read a case the app saved and vice
+ * versa. Only the evidence export needs REA to be running.
+ */
+async function commandCase(
+  args: readonly string[],
+  config: ReaClientConfig,
+  options: CaseOptions,
+): Promise<number> {
+  const [subcommand, name] = args;
+  const workspaceDir = resolve(options.workspace ?? config.workspaceDir);
+
+  if (subcommand === undefined) {
+    process.stderr.write(CASE_USAGE);
+    return 2;
+  }
+
+  try {
+    switch (subcommand) {
+      case "list":
+        return await caseList(workspaceDir, options.json);
+      case "show":
+        return await caseShow(workspaceDir, name, options);
+      case "save":
+        return await caseSave(workspaceDir, config, name, options);
+      case "delete":
+        return await caseDelete(workspaceDir, name, options.json);
+      default:
+        process.stderr.write(`Unknown case subcommand: ${subcommand}\n${CASE_USAGE}`);
+        return 2;
+    }
+  } catch (error) {
+    // Bad input is exit 2 everywhere, matching the JSON-RPC `-32602` mapping.
+    if (error instanceof CaseStoreError) {
+      process.stderr.write(`${error.message}\n`);
+      return 2;
+    }
+    throw error;
+  }
+}
+
+async function caseList(workspaceDir: string, json: boolean): Promise<number> {
+  const listed = await listCases(workspaceDir);
+  if (json) {
+    writeJson({ ok: true, ...listed });
+    return 0;
+  }
+
+  process.stdout.write(`${listed.casesRoot}\n`);
+  if (listed.total === 0) {
+    process.stdout.write("No saved cases. Save one from the desktop app or with `rea-client case save`.\n");
+    return 0;
+  }
+
+  for (const entry of listed.cases) {
+    process.stdout.write(`\n${entry.name}  ${entry.savedAt}\n  ${entry.directory}\n`);
+    if (entry.summary !== undefined) process.stdout.write(`  ${describeSummary(entry.summary)}\n`);
+    process.stdout.write(`  files: ${describeFiles(entry.files)}\n`);
+  }
+  if (listed.total > listed.cases.length) {
+    process.stdout.write(`\nShowing ${listed.cases.length} of ${listed.total} saved cases.\n`);
+  }
+  return 0;
+}
+
+async function caseShow(
+  workspaceDir: string,
+  name: string | undefined,
+  options: CaseOptions,
+): Promise<number> {
+  if (name === undefined) {
+    process.stderr.write("usage: rea-client case show <name>\n");
+    return 2;
+  }
+
+  const opened = await openCase(workspaceDir, normalizeCaseName(name, ""));
+  if (!opened.ok) {
+    process.stderr.write(`${opened.error ?? "the case could not be read"}\n`);
+    return 1;
+  }
+
+  if (options.report !== undefined) {
+    await writeFile(options.report, opened.report ?? "", { mode: 0o600 });
+  }
+  if (options.json) {
+    writeJson({ ...opened, ...(options.report === undefined ? {} : { reportPath: options.report }) });
+    return 0;
+  }
+
+  process.stdout.write(`Case: ${opened.name}\nSaved: ${opened.savedAt ?? "unknown"}\nDirectory: ${opened.directory ?? "?"}\n`);
+  if (opened.summary !== undefined) process.stdout.write(`Content: ${describeSummary(opened.summary)}\n`);
+  process.stdout.write(`Files: ${describeFiles(opened.files)}\n`);
+  if (opened.bundle !== undefined) {
+    process.stdout.write(
+      `Bundle: ${opened.bundle.records ?? "?"} record(s), ${opened.bundle.unknowns ?? "?"} unknown revision(s)\n`,
+    );
+  }
+
+  if (options.report !== undefined) {
+    process.stdout.write(
+      `Report: written to ${options.report} (${formatBytes(Buffer.byteLength(opened.report ?? ""))})\n`,
+    );
+    return 0;
+  }
+  if (opened.report === undefined) {
+    process.stdout.write("\nThis case has no Markdown report; the JSON companion is intact.\n");
+    return 0;
+  }
+  process.stdout.write(`\n${opened.report}${opened.report.endsWith("\n") ? "" : "\n"}`);
+  if (opened.reportTruncated === true) {
+    process.stderr.write("The report was truncated for display; use --report <file> to write it in full.\n");
+  }
+  return 0;
+}
+
+async function caseSave(
+  workspaceDir: string,
+  config: ReaClientConfig,
+  name: string | undefined,
+  options: CaseOptions,
+): Promise<number> {
+  if (name === undefined) {
+    process.stderr.write("usage: rea-client case save <name> --report <file> --json-report <file>\n");
+    return 2;
+  }
+  if (options.report === undefined || options.jsonReport === undefined) {
+    process.stderr.write('case save needs --report <file> and --json-report <file> ("-" reads stdin).\n');
+    return 2;
+  }
+  if (options.report === "-" && options.jsonReport === "-") {
+    process.stderr.write("Only one of --report and --json-report may read stdin.\n");
+    return 2;
+  }
+
+  const markdown = await readInput(options.report, "--report");
+  const jsonText = await readInput(options.jsonReport, "--json-report");
+  if (markdown === undefined || jsonText === undefined) return 1;
+
+  // A case whose companion does not parse cannot be opened again, so it is
+  // refused here rather than written and discovered later by `case show`.
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(jsonText);
+  } catch {
+    process.stderr.write("--json-report is not valid JSON; refusing to save an unreadable case.\n");
+    return 2;
+  }
+  if (typeof parsedJson !== "object" || parsedJson === null || Array.isArray(parsedJson)) {
+    process.stderr.write("--json-report must contain a JSON object, not an array or scalar.\n");
+    return 2;
+  }
+
+  const saved = await saveCase({
+    workspaceDir,
+    name,
+    markdown,
+    json: jsonText,
+    overwrite: options.overwrite,
+  });
+  if (!saved.ok) {
+    process.stderr.write(`${saved.error ?? "the case could not be saved"}\n`);
+    return 1;
+  }
+
+  let files = saved.files;
+  let evidence: BundleExport | undefined;
+  if (options.withEvidence) {
+    evidence = await exportBundle(config, join(saved.directory, "evidence-bundle.json"), true);
+    if (evidence.ok) {
+      files = withFile(files, "evidence-bundle.json", evidence.bytes);
+    } else {
+      // The report is the deliverable; the bundle is reported, not fatal.
+      process.stderr.write(`Evidence export failed: ${evidence.error}\n`);
+    }
+  }
+
+  const result = {
+    ok: true,
+    name: saved.name,
+    directory: saved.directory,
+    files,
+    ...(evidence === undefined ? {} : { evidence }),
+  };
+  if (options.json) {
+    writeJson(result);
+  } else {
+    process.stdout.write(`Saved case "${saved.name}" to ${saved.directory}\n`);
+    process.stdout.write(`Files: ${describeFiles(files)}\n`);
+    if (evidence !== undefined && evidence.ok) {
+      process.stdout.write(`Evidence: ${evidence.records} record(s), ${evidence.unknowns} unknown revision(s)\n`);
+    }
+  }
+  return evidence !== undefined && !evidence.ok ? 1 : 0;
+}
+
+async function caseDelete(
+  workspaceDir: string,
+  name: string | undefined,
+  json: boolean,
+): Promise<number> {
+  if (name === undefined) {
+    process.stderr.write("usage: rea-client case delete <name>\n");
+    return 2;
+  }
+
+  const removed = await deleteCase(workspaceDir, normalizeCaseName(name, ""));
+  if (json) writeJson(removed);
+  else if (removed.ok) process.stdout.write(`Removed ${removed.directory ?? name}\n`);
+  else process.stderr.write(`${removed.error ?? "the case could not be removed"}\n`);
+  return removed.ok ? 0 : 1;
+}
+
+/** Asks REA for its evidence bundle, which is the only step that needs a server. */
+async function exportBundle(
+  config: ReaClientConfig,
+  path: string,
+  overwrite: boolean,
+): Promise<BundleExport> {
+  const client = new ReaClient(config.rea, {
+    allowNonLoopback: config.policy.allowNonLoopback,
+  });
+  try {
+    await client.connect();
+    const catalog = ToolCatalog.from(await client.listTools());
+    if (!catalog.has("export_evidence_bundle")) {
+      return {
+        ok: false,
+        path,
+        error: "REA does not advertise export_evidence_bundle; the evidence bundle cannot be exported.",
+      };
+    }
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const raw = await client.callTool("export_evidence_bundle", {
+      path,
+      ...(overwrite ? { overwrite: true } : {}),
+    });
+    const exported = readExportedBundle(raw);
+    if (raw.isError === true || exported === undefined) {
+      return { ok: false, path, error: projectToolResult(raw, { maxChars: 2_000 }).text };
+    }
+    return { ok: true, ...exported };
+  } catch (error) {
+    return { ok: false, path, error: (error as Error).message };
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * `evidence export` writes the bundle REA currently holds. A case name keeps it
+ * beside the case it belongs to; `--out` writes it anywhere inside the
+ * workspace, so the CLI never scatters files outside the tree the app owns.
+ */
+async function commandEvidence(
+  args: readonly string[],
+  config: ReaClientConfig,
+  options: CaseOptions,
+): Promise<number> {
+  const [subcommand, name] = args;
+  const workspaceDir = resolve(options.workspace ?? config.workspaceDir);
+
+  if (subcommand !== "export") {
+    process.stderr.write(CASE_USAGE);
+    return 2;
+  }
+  if (name !== undefined && options.out !== undefined) {
+    process.stderr.write("Give either a case name or --out <path>, not both.\n");
+    return 2;
+  }
+
+  let target: string;
+  let overwrite = options.overwrite;
+  if (name !== undefined) {
+    let stem: string;
+    try {
+      stem = normalizeCaseName(name, "");
+    } catch (error) {
+      if (error instanceof CaseStoreError) {
+        process.stderr.write(`${error.message}\n`);
+        return 2;
+      }
+      throw error;
+    }
+    const directory = await resolveCaseDirectory(workspaceDir, stem);
+    if (directory === undefined) {
+      process.stderr.write(`No saved case named "${stem}" in ${casesRoot(workspaceDir)}.\n`);
+      return 1;
+    }
+    target = join(directory, "evidence-bundle.json");
+    // Re-exporting into the case it belongs to is the expected refresh.
+    overwrite = true;
+  } else if (options.out !== undefined) {
+    target = resolve(options.out);
+    if (!isInside(workspaceDir, target)) {
+      process.stderr.write(`--out must stay inside the workspace (${workspaceDir}).\n`);
+      return 2;
+    }
+  } else {
+    process.stderr.write(CASE_USAGE);
+    return 2;
+  }
+
+  const exported = await exportBundle(config, target, overwrite);
+  if (!exported.ok) {
+    process.stderr.write(`${exported.error}\n`);
+    if (options.json) writeJson(exported);
+    return 1;
+  }
+
+  if (options.json) {
+    writeJson(exported);
+  } else {
+    process.stdout.write(
+      `Exported ${exported.records} evidence record(s) (${exported.unknowns} unknown revision(s)) ` +
+        `to ${exported.path} (${formatBytes(exported.bytes)})\n`,
+    );
+  }
+  return 0;
 }
 
 interface VendorOptions {
