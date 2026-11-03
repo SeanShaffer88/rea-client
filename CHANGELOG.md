@@ -9,6 +9,12 @@ releases; see [Releasing](#releasing).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] — 2026-11-03
+
+The first release with a downloadable Windows installer.
+
 ### Added
 
 - **A Windows installer.** `npm run pack:win` builds
@@ -175,6 +181,7 @@ CLI version, packs the npm tarball plus `SHA256SUMS`, and publishes the GitHub
 release with this file's section as its notes. There is no separate manual
 publishing step; a tag without a matching section fails the job.
 
-[Unreleased]: https://github.com/SeanShaffer88/rea-client/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/SeanShaffer88/rea-client/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/SeanShaffer88/rea-client/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SeanShaffer88/rea-client/releases/tag/v0.2.0
 [0.1.0]: https://github.com/SeanShaffer88/rea-client/releases/tag/v0.1.0
