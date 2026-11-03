@@ -85,17 +85,19 @@ jobs:
           name: rea-workspace-windows-installer
           path: installer
 
-      - name: Check the installer
+      # download-artifact reproduces the archive's own layout, so the setup
+      # executable arrives under whatever directory it was uploaded from. It is
+      # copied to a known place once, and every later step -- checksum, notes,
+      # upload -- works from that copy instead of guessing where it landed.
+      - name: Normalise the installer path
         run: |
           set -eu
-          ls -l installer
-          test -n "$(find installer -name '*-setup.exe' -print -quit)" || {
-            echo "The installer artifact contains no setup executable." >&2
-            exit 1
-          }
-          # Named apart from the tarball's SHA256SUMS so both can sit in the same
-          # release without one shadowing the other.
-          find installer -name '*-setup.exe' -exec sha256sum {} \; | tee installer/SHA256SUMS-windows.txt
+          find installer -type f | sort
+          installer_path="$(find installer -name '*-setup.exe' -print -quit)"
+          test -n "$installer_path" || { echo "The installer artifact contains no setup executable." >&2; exit 1; }
+          cp "$installer_path" "release/$(basename "$installer_path")"
+          ( cd release && sha256sum ./*-setup.exe > SHA256SUMS-windows.txt )
+          cat release/SHA256SUMS-windows.txt
 
       # Notes come from the changelog entry for this version, so the release
       # text and the repository cannot drift apart. A tag without an entry is a
@@ -137,8 +139,11 @@ jobs:
 
           # Named from the artifact itself so the notes cannot claim a file the
           # release does not contain.
-          installer_name="$(find installer -name '*-setup.exe' -printf '%f\n' | head -1)"
-          installer_sha="$(sha256sum "installer/$installer_name" | cut -d' ' -f1)"
+          installer_name="$(cd release && ls ./*-setup.exe | head -1 | sed 's|^\./||')"
+          installer_sha="$(sha256sum "release/$installer_name" | cut -d' ' -f1)"
+          # An empty checksum here would publish a note that looks like a
+          # verification and verifies nothing.
+          test -n "$installer_sha" || { echo "No checksum for $installer_name." >&2; exit 1; }
           {
             echo
             echo "### Windows installer"
@@ -204,7 +209,7 @@ jobs:
 
           # Listed smallest first on purpose: the installer is ~190 MB, and if it
           # is the one that has to be retried the release already has the rest.
-          for asset in release/*.tgz release/SHA256SUMS installer/SHA256SUMS-windows.txt installer/*.exe; do
+          for asset in release/*.tgz release/SHA256SUMS release/SHA256SUMS-windows.txt release/*.exe; do
             attempt=1
             uploaded=0
             while [ "$attempt" -le 3 ]; do
@@ -231,6 +236,6 @@ jobs:
             echo
             echo '```'
             cat release/SHA256SUMS
-            cat installer/SHA256SUMS-windows.txt
+            cat release/SHA256SUMS-windows.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
