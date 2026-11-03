@@ -196,7 +196,7 @@ describe("EngineRpcServer — framing and JSON-RPC 2.0 validation", () => {
       harness.sendRaw('"engine.ping"}\r\n');
 
       const res = await splitPromise;
-      expect("result" in res && res.result).toMatchObject({ ok: true, version: "0.2.0" });
+      expect("result" in res && res.result).toMatchObject({ ok: true, version: "0.3.0" });
     } finally {
       await harness.close();
     }

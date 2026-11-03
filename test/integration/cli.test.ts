@@ -83,7 +83,7 @@ describe.skipIf(!hasBuild)("rea-client CLI", () => {
   it("prints version and exits 0 for --version", async () => {
     const result = await run(["--version"]);
     expect(result.code).toBe(0);
-    expect(result.stdout.trim()).toBe("0.2.0");
+    expect(result.stdout.trim()).toBe("0.3.0");
   });
 
   it("exits 2 without a stack trace on unknown flags, bad configs, or invalid --scope", async () => {

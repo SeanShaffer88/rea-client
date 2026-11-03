@@ -374,8 +374,7 @@ failed tool calls being returned to the model instead of aborting the turn.
 
 Releases are annotated `v*` tags on `main` with a matching GitHub release; the
 notes are taken from [`CHANGELOG.md`](CHANGELOG.md). The current release is
-**v0.2.0**, which adds the case and evidence commands to the CLI and moves
-release publishing into the tag workflow.
+**v0.3.0**, the first release that ships a Windows installer.
 
 Publishing is automated by [`release.yml`](.github/workflows/release.yml), which
 runs on the tag rather than on the merge. It re-checks the tree it is about to
@@ -388,8 +387,8 @@ notes. `ci.yml` stays read-only; the write token exists only in that tag job.
 To cut a release: merge to `main`, add the changelog section, then
 
 ```bash
-git tag -a v0.2.0 -m "rea-client 0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "rea-client 0.3.0"
+git push origin v0.3.0
 ```
 
 ## License
