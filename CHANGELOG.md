@@ -9,7 +9,33 @@ releases; see [Releasing](#releasing).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Case commands in the headless CLI.** `rea-client case list`, `show`, `save`,
+  and `delete` read and write the same `cases/<name>/` folders the desktop app
+  produces, so a case saved in one front end opens in the other. `case save`
+  takes `--report` and `--json-report` (either may be `-` for stdin), refuses a
+  companion that is not JSON, and only replaces an existing folder with
+  `--overwrite`. `case list`, `show`, `delete`, and a `save` without
+  `--with-evidence` need no engine, which makes them usable on a machine where
+  REA is not running.
+- **`rea-client evidence export [<case>]`.** Asks REA for its evidence bundle and
+  writes it to `cases/<name>/evidence-bundle.json`, or to `--out <path>` inside
+  the workspace. The only case-family command that connects to REA, and it
+  reports the bundle's record and unknown-revision counts instead of claiming
+  success on an empty file.
+- **Tag-triggered releases.** `.github/workflows/release.yml` publishes on a
+  `v*` tag: it re-verifies the vendored dependency and both test projects, packs
+  the npm tarball with `SHA256SUMS`, and creates the GitHub release from the
+  changelog section for that version. It fails when the tag, the built CLI
+  version, or the changelog disagree.
+
+### Changed
+
+- **One implementation of a case folder.** The name rules, permission bits,
+  conflict behaviour, and containment checks now live in `src/cases/store.ts`,
+  shared by the bridge's `case.*` methods and the CLI commands, instead of being
+  reachable only through the desktop RPC surface.
 
 ## [0.1.0] — 2026-11-03
 
@@ -107,11 +133,16 @@ that ships on top of them.
 
 ## Releasing
 
-1. Update the version here and in `package.json`.
+1. Add the `## [x.y.z]` section here and update the version in `package.json`
+   and `src/cli.ts`.
 2. Merge the release PR into `main` (merge commit, not squash).
 3. `git tag -a v0.1.0 -m "rea-client 0.1.0" && git push origin v0.1.0`.
-4. Create the GitHub release from that tag, using this file's section for the
-   version as the notes.
+
+Pushing the tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which builds and tests the tagged tree, checks that the tag matches the built
+CLI version, packs the npm tarball plus `SHA256SUMS`, and publishes the GitHub
+release with this file's section as its notes. There is no separate manual
+publishing step; a tag without a matching section fails the job.
 
 [Unreleased]: https://github.com/SeanShaffer88/rea-client/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/SeanShaffer88/rea-client/releases/tag/v0.1.0

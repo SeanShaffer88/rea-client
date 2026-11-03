@@ -1,7 +1,8 @@
 /**
  * Readers for saved case folders.
  *
- * A case folder is produced by `case.save`: `analysis.md`, `analysis.json`, and
+ * A case folder is produced by `case.save` (bridge) or `rea-client case save`
+ * (CLI): `analysis.md`, `analysis.json`, and
  * optionally `evidence-bundle.json` written by REA. Reading one back means
  * trusting a file that may have been edited, truncated, or replaced by hand, so
  * every field is optional and a file that does not parse is reported as
