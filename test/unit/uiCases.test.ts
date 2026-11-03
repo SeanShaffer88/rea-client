@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  caseDownloadName,
+  describeCaseStats,
+  describeCaseTarget,
   caseLocation,
   caseNameConflict,
   caseNameProblem,
   defaultCaseName,
   caseTotalBytes,
   describeCaseFiles,
+  shortDigest,
   describeCaseSave,
   describeSavedCase,
 } from "../../desktop/ui/cases.js";
@@ -95,5 +99,48 @@ describe("case naming", () => {
     expect(caseNameProblem("has space")).toBe("Use only letters, digits, dots, dashes, or underscores.");
     expect(caseNameProblem("a..b")).toBe("A name cannot contain ..");
     expect(caseNameProblem("x".repeat(81))).toBe("Keep the name to 80 characters or fewer.");
+  });
+});
+
+const SUMMARY = {
+  schemaVersion: 1,
+  exportedAt: "2026-11-02T12:00:00.000Z",
+  engineVersion: "6.8.0",
+  scope: "binary-core",
+  target: { name: "ls", path: "/usr/bin/ls", format: "elf", architecture: "x86_64", sha256: "cb30d69b24245bf2ecdc9e7f53bbad19" },
+  turns: 2,
+  observations: 3,
+  evidenceReferences: 1,
+};
+
+describe("case viewer helpers", () => {
+  it("identifies the target a case is about", () => {
+    expect(describeCaseTarget(SUMMARY)).toBe("ls · elf · x86_64");
+    expect(describeCaseTarget({ ...SUMMARY, target: { path: "/usr/bin/ls" } })).toBe("/usr/bin/ls");
+    expect(describeCaseTarget({ ...SUMMARY, target: {} })).toBe("Unnamed target");
+    expect(describeCaseTarget(undefined)).toBe("Target not recorded");
+  });
+
+  it("shortens a digest without misrepresenting it", () => {
+    expect(shortDigest(SUMMARY.target.sha256)).toBe("cb30d69b2424…");
+    expect(shortDigest("abc")).toBe("abc");
+    expect(shortDigest("")).toBeUndefined();
+    expect(shortDigest(undefined)).toBeUndefined();
+  });
+
+  it("counts turns, observations, and evidence references", () => {
+    expect(describeCaseStats(SUMMARY)).toBe("2 turns · 3 observations · 1 evidence reference");
+    expect(describeCaseStats({ ...SUMMARY, turns: 1, observations: 1, evidenceReferences: 0 })).toBe(
+      "1 turn · 1 observation",
+    );
+    expect(describeCaseStats({ ...SUMMARY, turns: 0, observations: 0, evidenceReferences: 0 })).toBe(
+      "0 turns · 0 observations",
+    );
+    expect(describeCaseStats(undefined)).toContain("no readable report summary");
+  });
+
+  it("names a downloaded report after its case, without path characters", () => {
+    expect(caseDownloadName("ls-triage")).toBe("ls-triage.json");
+    expect(caseDownloadName("../evil name")).toBe("..-evil-name.json");
   });
 });

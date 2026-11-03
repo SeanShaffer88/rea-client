@@ -169,6 +169,20 @@ describe("gateway over the real bridge process", () => {
     const listed = (await call("case.list")) as { cases: Array<{ name: string; files: Array<{ name: string }> }>; total: number };
     expect(listed.total).toBe(1);
     expect(listed.cases[0]?.name).toBe("integration-case");
+
+    // Reading the case back returns the report that was written, byte for byte.
+    const opened = (await call("case.open", { name: "integration-case" })) as {
+      ok: boolean;
+      report: string;
+      reportJson: string;
+      summary: { schemaVersion?: number; turns: number };
+      bundle?: { records: number; unknowns: number };
+    };
+    expect(opened.ok).toBe(true);
+    expect(opened.report).toBe("# REA analysis report\n\nintegration");
+    expect(opened.reportJson).toBe('{"schemaVersion":1}');
+    expect(opened.summary.schemaVersion).toBe(1);
+    expect(opened.bundle).toMatchObject({ records: 0, unknowns: 0 });
   }, 40_000);
 
   it("closes the engine child process with the gateway", async () => {

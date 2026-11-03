@@ -12,7 +12,7 @@
  *   - Oversized frames fail closed (`-32700`) before unbounded buffering.
  */
 
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { ReaClientConfig, ToolScopeName } from "../config.js";
 import { runDoctor, type DoctorOptions, type DoctorReport } from "../doctor.js";
@@ -30,6 +30,7 @@ import {
 } from "../mcp/evidenceBundle.js";
 import { ReaClient, type McpConnection } from "../mcp/ReaClient.js";
 import { readBinarySession } from "../mcp/session.js";
+import { readBundleCounts, readCaseSummary } from "../desktop/cases.js";
 import type { BinarySessionSummary } from "../mcp/types.js";
 import { canonicalizeTargetPath, TargetPathError, type PathPlatform } from "../platform/paths.js";
 
@@ -126,6 +127,10 @@ const EVIDENCE_RECORD_MAX_CHARS = 200_000;
 const CASE_DOCUMENT_MAX_CHARS = 2_000_000;
 /** Newest cases offered to the UI; the folder itself may hold more. */
 const CASE_LIST_LIMIT = 25;
+/** A saved report larger than this is not parsed for a one-line summary. */
+const CASE_SUMMARY_MAX_BYTES = 1_048_576;
+/** A saved report larger than this is not returned to the page in full. */
+const CASE_REPORT_MAX_CHARS = 4_000_000;
 const VALID_SCOPES: readonly ToolScopeName[] = [
   "binary-core",
   "binary-extended",
@@ -472,6 +477,9 @@ export class EngineRpcServer {
 
       case "case.list":
         return this.handleCaseList();
+
+      case "case.open":
+        return this.handleCaseOpen(params);
 
       case "target.session":
         return this.handleTargetSession();
@@ -991,9 +999,31 @@ export class EngineRpcServer {
     };
   }
 
+  /** Resolves an existing case folder, refusing anything outside the cases root. */
+  private async resolveCaseDirectory(name: string): Promise<string | undefined> {
+    const casesRoot = resolve(this.config.workspaceDir, "cases");
+    const directory = resolve(casesRoot, name);
+    if (!directory.startsWith(`${casesRoot}${sep}`)) return undefined;
+    const info = await stat(directory).catch(() => undefined);
+    return info?.isDirectory() === true ? directory : undefined;
+  }
+
+  private async caseFiles(directory: string): Promise<Array<{ name: string; bytes: number }>> {
+    const names = await readdir(directory).catch((): string[] => []);
+    const files: Array<{ name: string; bytes: number }> = [];
+    for (const name of names.sort()) {
+      const info = await stat(join(directory, name)).catch(() => undefined);
+      if (info === undefined || !info.isFile()) continue;
+      files.push({ name, bytes: info.size });
+    }
+    return files;
+  }
+
   /**
    * Lists saved case folders newest first. Only directories with the two report
-   * files are described as cases, so a stray folder cannot look like one.
+   * files are described as cases, so a stray folder cannot look like one. Where
+   * the report is small enough to read, its target and turn counts are included
+   * so the list says what each case is about instead of only its name.
    */
   private async handleCaseList(): Promise<unknown> {
     const casesRoot = resolve(this.config.workspaceDir, "cases");
@@ -1003,31 +1033,92 @@ export class EngineRpcServer {
       directory: string;
       savedAt: string;
       files: Array<{ name: string; bytes: number }>;
+      summary?: ReturnType<typeof readCaseSummary>;
     }> = [];
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const directory = join(casesRoot, entry.name);
-      const names = await readdir(directory).catch((): string[] => []);
-      if (!names.includes("analysis.md") || !names.includes("analysis.json")) continue;
-      const files: Array<{ name: string; bytes: number }> = [];
-      let newest = 0;
-      for (const name of names.sort()) {
-        const info = await stat(join(directory, name)).catch(() => undefined);
-        if (info === undefined || !info.isFile()) continue;
-        files.push({ name, bytes: info.size });
-        newest = Math.max(newest, info.mtimeMs);
-      }
+      const files = await this.caseFiles(directory);
+      if (!files.some((file) => file.name === "analysis.json")) continue;
+      if (!files.some((file) => file.name === "analysis.md")) continue;
+
+      const reportFile = files.find((file) => file.name === "analysis.json");
+      const report =
+        reportFile !== undefined && reportFile.bytes <= CASE_SUMMARY_MAX_BYTES
+          ? readCaseSummary(await readFile(join(directory, "analysis.json"), "utf8").catch(() => ""))
+          : undefined;
+
       cases.push({
         name: entry.name,
         directory,
-        savedAt: new Date(newest === 0 ? Date.now() : newest).toISOString(),
+        savedAt: new Date((await stat(directory).catch(() => undefined))?.mtimeMs ?? Date.now()).toISOString(),
         files,
+        ...(report === undefined ? {} : { summary: report }),
       });
     }
 
     cases.sort((left, right) => right.savedAt.localeCompare(left.savedAt));
     return { ok: true, casesRoot, cases: cases.slice(0, CASE_LIST_LIMIT), total: cases.length };
+  }
+
+  /**
+   * Reads a saved case back: the Markdown report, the JSON companion, and the
+   * counts from REA's bundle if one was written. Nothing here re-runs analysis;
+   * it shows what the folder actually contains.
+   */
+  private async handleCaseOpen(params: Record<string, unknown>): Promise<unknown> {
+    const name = this.caseName(params["name"], "");
+    if (name === "") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" is required.');
+    }
+    const directory = await this.resolveCaseDirectory(name);
+    if (directory === undefined) {
+      return { ok: false, name, files: [], error: `No saved case named "${name}" in this workspace.` };
+    }
+
+    const files = await this.caseFiles(directory);
+    if (!files.some((file) => file.name === "analysis.json")) {
+      return { ok: false, name, directory, files, error: "This folder has no analysis.json, so it is not a readable case." };
+    }
+
+    const readText = async (file: string): Promise<string | undefined> =>
+      await readFile(join(directory, file), "utf8").catch(() => undefined);
+    const reportJson = await readText("analysis.json");
+    if (reportJson === undefined) {
+      return { ok: false, name, directory, files, error: "analysis.json could not be read." };
+    }
+    const summary = readCaseSummary(reportJson);
+    if (summary === undefined) {
+      return { ok: false, name, directory, files, error: "analysis.json is not valid JSON, so this case cannot be read." };
+    }
+    const report = await readText("analysis.md");
+    const truncated = report !== undefined && report.length > CASE_REPORT_MAX_CHARS;
+
+    const bundleFile = files.find((file) => file.name === "evidence-bundle.json");
+    const bundle =
+      bundleFile === undefined
+        ? undefined
+        : {
+          path: join(directory, "evidence-bundle.json"),
+          bytes: bundleFile.bytes,
+          ...(readBundleCounts(await readText("evidence-bundle.json") ?? "") ?? {}),
+        };
+
+    const savedAt = new Date((await stat(directory).catch(() => undefined))?.mtimeMs ?? Date.now()).toISOString();
+    return {
+      ok: true,
+      name,
+      directory,
+      savedAt,
+      files,
+      summary,
+      ...(report === undefined ? {} : { report: truncated ? report.slice(0, CASE_REPORT_MAX_CHARS) : report }),
+      reportTruncated: truncated,
+      reportJson: reportJson.length > CASE_REPORT_MAX_CHARS ? reportJson.slice(0, CASE_REPORT_MAX_CHARS) : reportJson,
+      jsonTruncated: reportJson.length > CASE_REPORT_MAX_CHARS,
+      ...(bundle === undefined ? {} : { bundle }),
+    };
   }
 
   private async handleTargetSession(): Promise<unknown> {

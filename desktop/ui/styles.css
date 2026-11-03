@@ -4156,3 +4156,77 @@ kbd {
   color: var(--muted);
   line-height: 1.45;
 }
+
+/* Case viewer ------------------------------------------------------------- */
+.case-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  margin-bottom: 12px;
+}
+
+.case-summary .field-caption {
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.case-summary strong {
+  display: block;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.case-summary p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-soft);
+  word-break: break-word;
+}
+
+.case-summary .retained-id {
+  margin-top: 4px;
+  display: inline-block;
+}
+
+.case-doc-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
+.case-doc-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.case-doc-tabs button.active {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.case-doc {
+  max-height: 46vh;
+  overflow: auto;
+  padding: 4px 2px 8px;
+}
+
+.case-doc .code-panel pre {
+  max-height: 40vh;
+}

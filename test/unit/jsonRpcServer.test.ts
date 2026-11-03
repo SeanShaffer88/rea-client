@@ -762,6 +762,107 @@ describe("EngineRpcServer — saved cases", () => {
     }
   });
 
+  it("reads a saved case back, with its summary, report, and bundle counts", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-open-"));
+    const harness = new RpcHarness({ connection: evidenceConnection(), config: { ...DEFAULT_CONFIG, workspaceDir } });
+    try {
+      const report = {
+        schemaVersion: 1,
+        exportedAt: "2026-11-02T12:00:00.000Z",
+        engineVersion: "6.8.0",
+        target: { name: "ls", path: "/usr/bin/ls", format: "elf", architecture: "x86_64", sha256: "ab".repeat(32) },
+        scope: "binary-core",
+        turns: [
+          {
+            question: "What is this?",
+            answer: "An ELF binary.",
+            observations: [{ tool: "binary_overview", ok: true, evidenceId: `ev_${"cd".repeat(32)}` }],
+          },
+        ],
+      };
+      await harness.call("save", "case.save", {
+        name: "readable",
+        report: "# REA analysis report\n\nAn ELF binary.",
+        reportJson: JSON.stringify(report),
+        includeEvidence: false,
+      });
+
+      const opened = (await harness.call("open", "case.open", { name: "readable" })) as JsonRpcSuccessResponse;
+      expect(opened.result).toMatchObject({
+        ok: true,
+        name: "readable",
+        directory: join(workspaceDir, "cases", "readable"),
+        reportTruncated: false,
+        jsonTruncated: false,
+        summary: {
+          schemaVersion: 1,
+          scope: "binary-core",
+          turns: 1,
+          observations: 1,
+          evidenceReferences: 1,
+          target: { name: "ls", format: "elf", architecture: "x86_64" },
+        },
+      });
+      const result = opened.result as { report: string; reportJson: string; files: Array<{ name: string }> };
+      expect(result.report).toContain("An ELF binary.");
+      expect(JSON.parse(result.reportJson)).toMatchObject({ schemaVersion: 1 });
+      expect(result.files.map((file) => file.name)).toEqual(["analysis.json", "analysis.md"]);
+
+      // A missing case and a traversal attempt are answered, not thrown into a stack trace.
+      const missing = (await harness.call("missing", "case.open", { name: "nope" })) as JsonRpcSuccessResponse;
+      expect(missing.result).toMatchObject({ ok: false });
+      expect(String((missing.result as { error: string }).error)).toContain("No saved case named");
+
+      for (const name of ["../escape", "nested/path", ""]) {
+        const bad = (await harness.call(`bad-${name}`, "case.open", { name })) as JsonRpcErrorResponse;
+        expect(bad.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+      }
+      const notString = (await harness.call("bad-type", "case.open", { name: 7 })) as JsonRpcErrorResponse;
+      expect(notString.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+    } finally {
+      await harness.close();
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a case whose report is unreadable instead of showing an empty analysis", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-broken-"));
+    const harness = new RpcHarness({ connection: evidenceConnection(), config: { ...DEFAULT_CONFIG, workspaceDir } });
+    try {
+      const { mkdir: makeDir, writeFile: write } = await import("node:fs/promises");
+      const directory = join(workspaceDir, "cases", "broken");
+      await makeDir(directory, { recursive: true });
+      await write(join(directory, "analysis.md"), "# looks fine");
+      await write(join(directory, "analysis.json"), "{ not json");
+
+      const opened = (await harness.call("open", "case.open", { name: "broken" })) as JsonRpcSuccessResponse;
+      expect(opened.result).toMatchObject({ ok: false, name: "broken" });
+      expect(String((opened.result as { error: string }).error)).toContain("not valid JSON");
+      expect((opened.result as { files: Array<{ name: string }> }).files.map((file) => file.name)).toEqual([
+        "analysis.json",
+        "analysis.md",
+      ]);
+
+      // A folder with only a report has no analysis.json at all.
+      const half = join(workspaceDir, "cases", "half");
+      await makeDir(half, { recursive: true });
+      await write(join(half, "analysis.md"), "# only markdown");
+      const partial = (await harness.call("half", "case.open", { name: "half" })) as JsonRpcSuccessResponse;
+      expect(String((partial.result as { error: string }).error)).toContain("no analysis.json");
+
+      // The list still shows the folder (it has both reports) but no summary,
+      // and the markdown-only folder is not a case at all.
+      const listed = (await harness.call("list", "case.list")) as JsonRpcSuccessResponse;
+      const rows = (listed.result as { total: number; cases: Array<{ name: string; summary?: unknown }> });
+      expect(rows.total).toBe(1);
+      expect(rows.cases[0]?.name).toBe("broken");
+      expect(rows.cases[0]?.summary).toBeUndefined();
+    } finally {
+      await harness.close();
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists saved cases newest first and ignores folders that are not cases", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-list-"));
     const harness = new RpcHarness({ connection: evidenceConnection(), config: { ...DEFAULT_CONFIG, workspaceDir } });
@@ -788,6 +889,8 @@ describe("EngineRpcServer — saved cases", () => {
       expect(result.total).toBe(2);
       expect(result.cases.map((entry) => entry.name)).toEqual(["newer", "older"]);
       expect(result.cases[0]?.files.map((file) => file.name)).toEqual(["analysis.json", "analysis.md"]);
+      // The list describes what each case is about, read from its report.
+      expect((result.cases[0] as unknown as { summary: { turns: number } }).summary.turns).toBe(0);
       expect(Date.parse(result.cases[0]!.savedAt)).toBeGreaterThan(Date.parse(result.cases[1]!.savedAt));
     } finally {
       await harness.close();
