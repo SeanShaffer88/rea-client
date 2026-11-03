@@ -183,7 +183,7 @@ export class EngineRpcServer {
     this.input = options.input;
     this.output = options.output;
     this.maxLineBytes = options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
-    this.version = options.version ?? "0.1.0";
+    this.version = options.version ?? "0.2.0";
     this.platform = options.platform ?? defaultPlatform();
     this.activeScopeName = options.config.agent.toolScope;
     this.createConnection =

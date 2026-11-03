@@ -62,7 +62,7 @@ import type { CaseSummary } from "./cases/report.js";
 import { readExportedBundle } from "./mcp/evidenceBundle.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
-const CLI_VERSION = "0.1.0";
+const CLI_VERSION = "0.2.0";
 const VALID_SCOPES: readonly ToolScopeName[] = [
   "binary-core",
   "binary-extended",

@@ -27,7 +27,7 @@ function stubResponse({ status = 200, body, stream = false }: StubOptions = {}):
 const BOOTSTRAP = {
   token: "session-token",
   mode: "browser" as const,
-  version: "0.1.0",
+  version: "0.2.0",
   platform: "linux",
   config: {
     model: "validation-model",
@@ -103,7 +103,7 @@ type Handler = (params: Record<string, unknown>) => StubOptions;
 function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ method: string; params: Record<string, unknown> }> } {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const defaults: Record<string, Handler> = {
-    "engine.ping": () => ({ body: { result: { ok: true, version: "0.1.0", pid: 42, connected: true, running: true } } }),
+    "engine.ping": () => ({ body: { result: { ok: true, version: "0.2.0", pid: 42, connected: true, running: true } } }),
     "tools.list": () => ({ body: { result: CATALOG } }),
     "target.session": () => ({ body: { result: { session: null } } }),
     "engine.doctor": () => ({ body: { result: DOCTOR } }),

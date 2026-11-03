@@ -9,6 +9,13 @@ releases; see [Releasing](#releasing).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] — 2026-11-03
+
+First release cut by `.github/workflows/release.yml` rather than by hand: the
+tag builds, tests, packs, and publishes itself.
+
 ### Added
 
 - **Case commands in the headless CLI.** `rea-client case list`, `show`, `save`,
@@ -144,5 +151,6 @@ CLI version, packs the npm tarball plus `SHA256SUMS`, and publishes the GitHub
 release with this file's section as its notes. There is no separate manual
 publishing step; a tag without a matching section fails the job.
 
-[Unreleased]: https://github.com/SeanShaffer88/rea-client/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/SeanShaffer88/rea-client/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/SeanShaffer88/rea-client/releases/tag/v0.2.0
 [0.1.0]: https://github.com/SeanShaffer88/rea-client/releases/tag/v0.1.0

@@ -333,7 +333,8 @@ failed tool calls being returned to the model instead of aborting the turn.
 
 Releases are annotated `v*` tags on `main` with a matching GitHub release; the
 notes are taken from [`CHANGELOG.md`](CHANGELOG.md). The current release is
-**v0.1.0**, the first tag of the engine, CLI, and desktop workspace.
+**v0.2.0**, which adds the case and evidence commands to the CLI and moves
+release publishing into the tag workflow.
 
 Publishing is automated by [`release.yml`](.github/workflows/release.yml), which
 runs on the tag rather than on the merge. It re-checks the tree it is about to

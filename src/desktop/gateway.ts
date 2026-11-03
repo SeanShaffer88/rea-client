@@ -142,7 +142,7 @@ export class DesktopGateway {
         }
         const config = this.options.config;
         const bootstrap: Bootstrap = {
-          token: this.token, mode: this.options.mode ?? "desktop", version: "0.1.0", platform: process.platform,
+          token: this.token, mode: this.options.mode ?? "desktop", version: "0.2.0", platform: process.platform,
           config: { model: config.llm.model, baseUrl: config.llm.baseUrl, contextWindow: config.llm.contextWindow, maxIterations: config.agent.maxIterations, toolScope: config.agent.toolScope, customTools: [...config.agent.customTools], allowNonLoopback: config.policy.allowNonLoopback, workspaceDir: resolve(config.workspaceDir), configPath: resolve(this.options.configPath), transport: config.rea.transport },
         };
         this.json(response, 200, bootstrap); return;
