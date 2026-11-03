@@ -189,21 +189,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" -q .id)"
+
+          # `gh release upload` streams the body itself; for the ~190 MB installer
+          # a plain POST of the file through the REST API is the fallback, and it
+          # is also what makes the failure message readable in an annotation.
+          upload() {
+            gh release upload "$GITHUB_REF_NAME" "$1" --clobber 2>&1 && return 0
+            gh api --method POST \
+              -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$(basename "$1")" \
+              --input "$1" 2>&1
+          }
+
           # Listed smallest first on purpose: the installer is ~190 MB, and if it
           # is the one that has to be retried the release already has the rest.
           for asset in release/*.tgz release/SHA256SUMS installer/SHA256SUMS-windows.txt installer/*.exe; do
-            for attempt in 1 2 3; do
-              if gh release upload "$GITHUB_REF_NAME" "$asset" --clobber; then
+            attempt=1
+            uploaded=0
+            while [ "$attempt" -le 3 ]; do
+              if output=$(upload "$asset"); then
                 echo "uploaded $asset"
+                uploaded=1
                 break
               fi
-              if [ "$attempt" = 3 ]; then
-                echo "failed to upload $asset after 3 attempts" >&2
-                exit 1
-              fi
-              echo "retrying $asset (attempt $attempt failed)" >&2
+              echo "::warning title=Upload failed::$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-600)"
+              attempt=$((attempt + 1))
               sleep 15
             done
+            if [ "$uploaded" -eq 0 ]; then
+              echo "::error title=Upload failed::$asset could not be uploaded; the release exists and can be completed by re-running this job."
+              exit 1
+            fi
           done
           gh release view "$GITHUB_REF_NAME" --json assets -q '.assets[] | "\(.name) \(.size) \(.state)"'
 
