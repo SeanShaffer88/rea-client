@@ -157,6 +157,7 @@ function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ 
       body: { result: { ok: true, path: "/tmp/workspace/evidence/bundle.json", bytes: 8117, records: 2, unknowns: 0 } },
     }),
     "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [], total: 0 } } }),
+    "case.delete": ({ name }) => ({ body: { result: { ok: true, name, directory: `/tmp/workspace/cases/${String(name)}` } } }),
     "case.open": ({ name }) => ({
       body: {
         result: {
@@ -547,6 +548,111 @@ describe("App", () => {
     expect(document.querySelector(".modal .error-notice")?.textContent).toContain("not valid JSON");
     expect(document.querySelector(".modal .error-notice")?.textContent).toContain("analysis.json");
     expect(document.querySelector(".modal .case-doc")).toBeNull();
+  });
+
+  it("deletes a case only after an explicit confirmation", async () => {
+    let listed = 0;
+    const { calls } = installFetch({
+      "case.list": () => {
+        listed += 1;
+        const entries = listed === 1
+          ? [{ name: "ls-triage", directory: "/tmp/workspace/cases/ls-triage", savedAt: "2026-11-02T12:00:00.000Z", files: [{ name: "analysis.md", bytes: 10 }] }]
+          : [];
+        return { body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: entries, total: entries.length } } };
+      },
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("case row", () => document.querySelectorAll(".case-row").length === 1);
+
+    await act(async () => (document.querySelector(".case-row") as HTMLButtonElement).click());
+    await waitFor("case viewer", () => document.querySelector(".case-summary") !== null);
+    await act(async () => buttonWith("Delete case")?.click());
+
+    await waitFor("delete confirmation", () => document.querySelector(".case-warning") !== null);
+    // Nothing is deleted until the confirmation is accepted.
+    expect(document.querySelector(".case-warning")?.textContent).toContain("workspace/cases/ls-triage");
+    expect(document.querySelector(".case-warning")?.textContent).toContain("cannot be undone");
+    expect(calls.some((call) => call.method === "case.delete")).toBe(false);
+
+    await act(async () => buttonWith("Delete folder")?.click());
+    await waitFor("delete toast", () => (document.querySelector(".toast")?.textContent ?? "").includes("deleted from the workspace"));
+    expect(calls.at(-2)).toEqual({ method: "case.delete", params: { name: "ls-triage" } });
+    // The viewer closes and the list is reloaded from the service.
+    await waitFor("viewer closed", () => document.querySelector(".case-summary") === null);
+    await waitFor("case list refreshed", () => document.querySelectorAll(".case-row").length === 0);
+    expect(document.querySelector(".cases-panel .empty-state")).not.toBeNull();
+  });
+
+  it("keeps a case when the confirmation is declined, and reports a failed delete", async () => {
+    installFetch({
+      "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [{ name: "kept", directory: "/tmp/workspace/cases/kept", savedAt: "2026-11-02T12:00:00.000Z", files: [] }], total: 1 } } }),
+      "case.delete": ({ name }) => ({ body: { result: { ok: false, name, error: "EBUSY: the folder is in use" } } }),
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("case row", () => document.querySelectorAll(".case-row").length === 1);
+    await act(async () => (document.querySelector(".case-row") as HTMLButtonElement).click());
+    await waitFor("case viewer", () => document.querySelector(".case-summary") !== null);
+
+    await act(async () => buttonWith("Delete case")?.click());
+    await waitFor("delete confirmation", () => document.querySelector(".case-warning") !== null);
+    await act(async () => buttonWith("Keep the case")?.click());
+    expect(document.querySelector(".case-warning")).toBeNull();
+    expect(document.querySelector(".case-summary")).not.toBeNull();
+
+    await act(async () => buttonWith("Delete case")?.click());
+    await act(async () => buttonWith("Delete folder")?.click());
+    await waitFor("delete error", () => document.querySelector(".modal .error-notice") !== null);
+    expect(document.querySelector(".modal .error-notice")?.textContent).toContain("EBUSY");
+    // The viewer stays open so the user can see what happened.
+    expect(document.querySelector(".case-summary")).not.toBeNull();
+  });
+
+  it("filters saved cases by target and reopens the recorded target", async () => {
+    const caseFor = (name: string, targetName: string, format: string) => ({
+      name,
+      directory: `/tmp/workspace/cases/${name}`,
+      savedAt: "2026-11-02T12:00:00.000Z",
+      files: [{ name: "analysis.md", bytes: 10 }],
+      summary: {
+        schemaVersion: 1,
+        scope: "binary-core",
+        target: { name: targetName, path: `/usr/bin/${targetName}`, format },
+        turns: 1,
+        observations: 1,
+        evidenceReferences: 0,
+      },
+    });
+    const saved = [caseFor("ls-case", "ls", "elf"), caseFor("app-case", "app.exe", "pe")];
+    const { calls } = installFetch({
+      "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: saved, total: saved.length } } }),
+      "case.open": ({ name }) => {
+        const entry = saved.find((candidate) => candidate.name === name);
+        return { body: { result: { ok: true, ...entry, report: "# saved", reportJson: "{}" } } };
+      },
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("case rows", () => document.querySelectorAll(".case-row").length === 2);
+
+    const search = document.querySelector('input[aria-label="Search saved cases"]') as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(search, "app.exe");
+      search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await waitFor("filtered case rows", () => document.querySelectorAll(".case-row").length === 1);
+    expect(document.querySelector(".case-row")?.textContent).toContain("app-case");
+
+    await act(async () => (document.querySelector(".case-row") as HTMLButtonElement).click());
+    await waitFor("case viewer", () => document.querySelector(".case-summary") !== null);
+    await act(async () => buttonWith("Reopen target")?.click());
+    await waitFor("target probe", () => calls.some((call) => call.method === "target.probe"));
+    expect(calls.filter((call) => call.method === "target.probe").at(-1)?.params).toEqual({ path: "/usr/bin/app.exe" });
   });
 
   it("offers to overwrite a case whose folder name is taken", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   caseDownloadName,
+  describeCaseDeletion,
   describeCaseStats,
   describeCaseTarget,
   caseLocation,
@@ -9,6 +10,7 @@ import {
   defaultCaseName,
   caseTotalBytes,
   describeCaseFiles,
+  filterSavedCases,
   shortDigest,
   describeCaseSave,
   describeSavedCase,
@@ -142,5 +144,35 @@ describe("case viewer helpers", () => {
   it("names a downloaded report after its case, without path characters", () => {
     expect(caseDownloadName("ls-triage")).toBe("ls-triage.json");
     expect(caseDownloadName("../evil name")).toBe("..-evil-name.json");
+  });
+});
+
+describe("case list search and deletion copy", () => {
+  const CASES = [
+    { name: "ls-triage", summary: SUMMARY },
+    {
+      name: "app-review",
+      summary: { ...SUMMARY, scope: "binary-extended", target: { name: "app.exe", path: "C:\\Samples\\app.exe", format: "pe", sha256: "ffee".repeat(16) } },
+    },
+    { name: "broken-folder" },
+  ];
+
+  it("finds a case by name, target, scope, or digest", () => {
+    expect(filterSavedCases(CASES, "").length).toBe(3);
+    expect(filterSavedCases(CASES, "triage").map((entry) => entry.name)).toEqual(["ls-triage"]);
+    expect(filterSavedCases(CASES, "APP.EXE").map((entry) => entry.name)).toEqual(["app-review"]);
+    expect(filterSavedCases(CASES, "binary-extended").map((entry) => entry.name)).toEqual(["app-review"]);
+    expect(filterSavedCases(CASES, "ffee").map((entry) => entry.name)).toEqual(["app-review"]);
+    expect(filterSavedCases(CASES, "x86_64").map((entry) => entry.name)).toEqual(["ls-triage"]);
+    expect(filterSavedCases(CASES, "nothing-here")).toEqual([]);
+    // A case with no readable report is still findable by its folder name.
+    expect(filterSavedCases(CASES, "broken").map((entry) => entry.name)).toEqual(["broken-folder"]);
+  });
+
+  it("states exactly what a delete removes", () => {
+    const message = describeCaseDeletion("ls-triage", [{ name: "analysis.md" }, { name: "analysis.json" }], "/home/analyst/work");
+    expect(message).toBe("work/cases/ls-triage will be deleted, along with analysis.md, analysis.json. This cannot be undone.");
+    expect(describeCaseDeletion("empty-case", [], "/home/analyst/work")).toContain("along with the folder.");
+    expect(describeCaseDeletion("empty-case", [], "/home/analyst/work")).toContain("cannot be undone");
   });
 });

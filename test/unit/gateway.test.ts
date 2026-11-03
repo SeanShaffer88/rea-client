@@ -248,6 +248,10 @@ describe("DesktopGateway", () => {
     expect(opened.status).toBe(200);
     expect(bridge.requests.at(-1)).toEqual({ method: "case.open", params: { name: "ls-triage" } });
 
+    const removed = await call({ method: "case.delete", params: { name: "ls-triage" } });
+    expect(removed.status).toBe(200);
+    expect(bridge.requests.at(-1)).toEqual({ method: "case.delete", params: { name: "ls-triage" } });
+
     // Reports are the biggest body the page can send; they are bounded at the edge.
     const before = bridge.requests.length;
     expect((await call({ method: "case.save", params: { report: 7, reportJson: "{}" } })).status).toBe(400);
@@ -263,6 +267,12 @@ describe("DesktopGateway", () => {
     expect((await call({ method: "case.open", params: { name: "n".repeat(97) } })).status).toBe(400);
     expect((await call({ method: "case.open", params: { name: 3 } })).status).toBe(400);
     expect((await call({ method: "case.open", params: { name: "../escape" } })).status).toBe(400);
+    // Deletion is destructive: a bad name never reaches the engine.
+    expect((await call({ method: "case.open", params: { name: "../escape" } })).status).toBe(400);
+    expect((await call({ method: "case.delete", params: {} })).status).toBe(400);
+    expect((await call({ method: "case.delete", params: { name: "../escape" } })).status).toBe(400);
+    expect((await call({ method: "case.delete", params: { name: "nested/path" } })).status).toBe(400);
+    expect((await call({ method: "case.delete", params: { name: 12 } })).status).toBe(400);
     expect((await call({ method: "case.open", params: { name: "nested/path" } })).status).toBe(400);
     expect((await call({ method: "case.save", params: { report: "x", reportJson: "{}", name: "../escape" } })).status).toBe(400);
     expect(bridge.requests.length).toBe(before);

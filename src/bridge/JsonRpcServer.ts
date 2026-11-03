@@ -12,7 +12,7 @@
  *   - Oversized frames fail closed (`-32700`) before unbounded buffering.
  */
 
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { ReaClientConfig, ToolScopeName } from "../config.js";
 import { runDoctor, type DoctorOptions, type DoctorReport } from "../doctor.js";
@@ -480,6 +480,9 @@ export class EngineRpcServer {
 
       case "case.open":
         return this.handleCaseOpen(params);
+
+      case "case.delete":
+        return this.handleCaseDelete(params);
 
       case "target.session":
         return this.handleTargetSession();
@@ -1119,6 +1122,39 @@ export class EngineRpcServer {
       jsonTruncated: reportJson.length > CASE_REPORT_MAX_CHARS,
       ...(bundle === undefined ? {} : { bundle }),
     };
+  }
+
+  /**
+   * Removes a saved case folder.
+   *
+   * Destructive and irreversible, so it only ever touches one directory that is
+   * strictly inside `<workspaceDir>/cases`, never the root itself, and never a
+   * path that is not a directory. The caller must confirm in the UI; the bridge
+   * re-checks the name rather than trusting that.
+   */
+  private async handleCaseDelete(params: Record<string, unknown>): Promise<unknown> {
+    const name = this.caseName(params["name"], "");
+    if (name === "") {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" is required.');
+    }
+    const directory = await this.resolveCaseDirectory(name);
+    if (directory === undefined) {
+      return { ok: false, name, error: `No saved case named "${name}" in this workspace.` };
+    }
+    // `resolveCaseDirectory` already proves containment and directory-ness; this
+    // covers the case where the name is the root itself (e.g. "." would fail the
+    // name rule, but the guard is cheap and states the invariant).
+    const casesRoot = resolve(this.config.workspaceDir, "cases");
+    if (directory === casesRoot || !directory.startsWith(`${casesRoot}${sep}`)) {
+      throw new JsonRpcException(JSON_RPC_ERRORS.INVALID_PARAMS, '"name" must address a case folder.');
+    }
+
+    try {
+      await rm(directory, { recursive: true, force: false, maxRetries: 2 });
+    } catch (error) {
+      return { ok: false, name, directory, error: `The case folder could not be removed: ${(error as Error).message}` };
+    }
+    return { ok: true, name, directory };
   }
 
   private async handleTargetSession(): Promise<unknown> {

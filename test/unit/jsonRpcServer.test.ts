@@ -863,6 +863,47 @@ describe("EngineRpcServer — saved cases", () => {
     }
   });
 
+  it("deletes a saved case folder and nothing outside the cases root", async () => {
+    const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-delete-"));
+    const harness = new RpcHarness({ connection: evidenceConnection(), config: { ...DEFAULT_CONFIG, workspaceDir } });
+    const { mkdir: makeDir, stat: statFile, writeFile: write } = await import("node:fs/promises");
+    try {
+      await harness.call("save", "case.save", {
+        name: "disposable",
+        report: "# temporary",
+        reportJson: "{}",
+        includeEvidence: false,
+      });
+      // A sibling file outside the case must survive the delete.
+      await write(join(workspaceDir, "keep.txt"), "keep");
+
+      const removed = (await harness.call("delete", "case.delete", { name: "disposable" })) as JsonRpcSuccessResponse;
+      expect(removed.result).toMatchObject({ ok: true, name: "disposable" });
+      await expect(statFile(join(workspaceDir, "cases", "disposable"))).rejects.toThrow();
+      expect((await statFile(join(workspaceDir, "keep.txt"))).isFile()).toBe(true);
+
+      // Deleting it again reports that it is gone instead of failing silently.
+      const again = (await harness.call("delete-again", "case.delete", { name: "disposable" })) as JsonRpcSuccessResponse;
+      expect(again.result).toMatchObject({ ok: false, name: "disposable" });
+      expect(String((again.result as { error: string }).error)).toContain("No saved case named");
+
+      // Traversal and empty names are argument errors, and an outside directory
+      // cannot be removed through the case surface.
+      const outside = join(workspaceDir, "outside");
+      await makeDir(outside, { recursive: true });
+      for (const name of ["../outside", "nested/path", "", ".", ".."]) {
+        const bad = (await harness.call(`bad-${name}`, "case.delete", { name })) as JsonRpcErrorResponse;
+        expect(bad.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+      }
+      const nonString = (await harness.call("bad-type", "case.delete", { name: 7 })) as JsonRpcErrorResponse;
+      expect(nonString.error.code).toBe(JSON_RPC_ERRORS.INVALID_PARAMS);
+      expect((await statFile(outside)).isDirectory()).toBe(true);
+    } finally {
+      await harness.close();
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists saved cases newest first and ignores folders that are not cases", async () => {
     const workspaceDir = await mkdtemp(join(tmpdir(), "rea-case-list-"));
     const harness = new RpcHarness({ connection: evidenceConnection(), config: { ...DEFAULT_CONFIG, workspaceDir } });

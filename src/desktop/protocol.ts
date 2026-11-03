@@ -129,6 +129,13 @@ export interface CaseOpenSnapshot {
   bundle?: { path: string; bytes: number; records?: number; unknowns?: number };
   error?: string;
 }
+/** Result of removing a saved case folder. */
+export interface CaseDeleteSnapshot {
+  ok: boolean;
+  name: string;
+  directory?: string;
+  error?: string;
+}
 export interface CaseListSnapshot {
   ok: boolean;
   casesRoot: string;
