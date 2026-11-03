@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -9,6 +10,8 @@ import { DEFAULT_CONFIG } from "../../src/config.js";
 import type { DesktopEvent } from "../../src/desktop/protocol.js";
 
 const fixture = resolve("test/support/fakeEngine.mjs");
+const CLI = resolve("dist/cli.js");
+const REA_ENTRY = resolve("node_modules/rea-agents/scripts/rea.mjs");
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
@@ -109,6 +112,64 @@ describe("gateway over the real bridge process", () => {
     const replayed = received.filter((event) => event.id < live.id).map((event) => event.id);
     expect(replayed).toEqual([...replayed].sort((a, b) => a - b));
   }, 30_000);
+
+  it("saves a case folder through the gateway and lists it back", async () => {
+    // This one needs the *real* engine process: `case.save` is implemented in
+    // `dist/cli.js serve`, not in the fixture, and asserting against a fake
+    // would only test the fake.
+    if (!existsSync(CLI)) return;
+    const directory = await mkdtemp(join(tmpdir(), "rea-gateway-case-"));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ rea: { command: process.execPath, args: [REA_ENTRY, "mcp"] }, workspaceDir: join(directory, "workspace") }), "utf8");
+    const bridge = new EngineBridge({ cliPath: CLI, configPath, requestTimeoutMs: 120_000 });
+    const gateway = new DesktopGateway({
+      bridge,
+      config: { ...DEFAULT_CONFIG, workspaceDir: join(directory, "workspace") },
+      configPath,
+      staticDir: join(directory, "static"),
+      port: 0,
+      mode: "browser",
+    });
+    await mkdir(join(directory, "static"), { recursive: true });
+    await gateway.listen();
+    cleanups.push(async () => {
+      await gateway.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const { token } = (await (await fetch(`${gateway.origin}/api/session`)).json()) as { token: string };
+    const call = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> => {
+      const response = await fetch(`${gateway.origin}/api/rpc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-REA-Token": token },
+        body: JSON.stringify({ method, params }),
+      });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { result: unknown }).result;
+    };
+
+    const saved = (await call("case.save", {
+      name: "integration-case",
+      report: "# REA analysis report\n\nintegration",
+      reportJson: '{"schemaVersion":1}',
+      // The fixture engine has no REA tools, so the bundle step must degrade.
+      includeEvidence: true,
+    })) as { ok: boolean; directory: string; files: Array<{ name: string }>; evidence?: { ok: boolean } };
+    expect(saved.ok).toBe(true);
+    expect(saved.files.map((file) => file.name)).toEqual([
+      "analysis.md",
+      "analysis.json",
+      "evidence-bundle.json",
+    ]);
+    // REA wrote the package itself: the file is the canonical byte-stable bundle.
+    expect(saved.evidence).toMatchObject({ ok: true, unknowns: 0 });
+    const bundle = await readFile(join(saved.directory, "evidence-bundle.json"), "utf8");
+    expect(bundle.startsWith('{"artifacts"')).toBe(true);
+    expect(await readFile(join(saved.directory, "analysis.md"), "utf8")).toBe("# REA analysis report\n\nintegration");
+
+    const listed = (await call("case.list")) as { cases: Array<{ name: string; files: Array<{ name: string }> }>; total: number };
+    expect(listed.total).toBe(1);
+    expect(listed.cases[0]?.name).toBe("integration-case");
+  }, 40_000);
 
   it("closes the engine child process with the gateway", async () => {
     const { gateway, bridge } = await start();

@@ -4099,3 +4099,60 @@ kbd {
   color: var(--muted);
   padding: 6px 2px;
 }
+
+/* Case folders ------------------------------------------------------------ */
+.case-row {
+  cursor: default;
+}
+
+.case-row:hover {
+  border-color: var(--line);
+}
+
+.case-row .retained-id {
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+/* Save-case dialog -------------------------------------------------------- */
+.field-error {
+  font-size: 11.5px;
+  color: var(--red);
+  margin: 2px 0 0;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.checkbox-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.checkbox-row strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.checkbox-row small {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}

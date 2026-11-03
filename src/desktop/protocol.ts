@@ -68,6 +68,38 @@ export interface EvidenceExportSnapshot {
   unknowns?: number;
   error?: string;
 }
+/** A file written into a saved case folder. */
+export interface CaseFile {
+  name: string;
+  bytes: number;
+}
+/**
+ * A finished analysis persisted in the workspace: the Markdown and JSON report,
+ * plus REA's own canonical bundle when the engine could write one.
+ */
+export interface CaseSnapshot {
+  ok: boolean;
+  name?: string;
+  /** Absolute folder the bridge created. */
+  directory?: string;
+  files: CaseFile[];
+  /** Result of the automatic bundle export; `ok: false` explains why it is missing. */
+  evidence?: { ok: boolean; path?: string; bytes?: number; records?: number; unknowns?: number; error?: string };
+  /** Present when the save was refused (for example an existing case name). */
+  error?: string;
+}
+export interface SavedCase {
+  name: string;
+  directory: string;
+  savedAt: string;
+  files: CaseFile[];
+}
+export interface CaseListSnapshot {
+  ok: boolean;
+  casesRoot: string;
+  cases: SavedCase[];
+  total: number;
+}
 export interface TargetSnapshot {
   ok: boolean;
   observation?: string;

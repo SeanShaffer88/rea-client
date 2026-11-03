@@ -156,6 +156,22 @@ function installFetch(handlers: Record<string, Handler> = {}): { calls: Array<{ 
     "evidence.export": () => ({
       body: { result: { ok: true, path: "/tmp/workspace/evidence/bundle.json", bytes: 8117, records: 2, unknowns: 0 } },
     }),
+    "case.list": () => ({ body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [], total: 0 } } }),
+    "case.save": () => ({
+      body: {
+        result: {
+          ok: true,
+          name: "case-2026-11-02T00-00-00-000Z",
+          directory: "/tmp/workspace/cases/case-2026-11-02T00-00-00-000Z",
+          files: [
+            { name: "analysis.md", bytes: 900 },
+            { name: "analysis.json", bytes: 1200 },
+            { name: "evidence-bundle.json", bytes: 8117 },
+          ],
+          evidence: { ok: true, path: "/tmp/workspace/cases/case-2026-11-02T00-00-00-000Z/evidence-bundle.json", bytes: 8117, records: 2, unknowns: 0 },
+        },
+      },
+    }),
   };
 
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -353,6 +369,132 @@ describe("App", () => {
     await waitFor("export toast", () => (document.querySelector(".toast")?.textContent ?? "").includes("Evidence bundle exported"));
     expect(calls.at(-1)).toEqual({ method: "evidence.export", params: {} });
     expect(document.querySelector(".toast")?.textContent).toContain("2 records · 0 unknowns");
+  });
+
+  it("saves the analysis as a case folder and lists what is already saved", async () => {
+    const saved = {
+      name: "ls-triage",
+      directory: "/tmp/workspace/cases/ls-triage",
+      savedAt: "2026-11-02T12:00:00.000Z",
+      files: [
+        { name: "analysis.json", bytes: 1200 },
+        { name: "analysis.md", bytes: 900 },
+        { name: "evidence-bundle.json", bytes: 8117 },
+      ],
+    };
+    let listed = false;
+    const { calls } = installFetch({
+      "case.list": () => {
+        if (listed) return { body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [saved], total: 1 } } };
+        listed = true;
+        return { body: { result: { ok: true, casesRoot: "/tmp/workspace/cases", cases: [], total: 0 } } };
+      },
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("cases panel", () => document.querySelector(".cases-panel") !== null);
+    await waitFor("empty cases", () => document.querySelector(".cases-panel .empty-state") !== null);
+
+    const save = [...document.querySelectorAll(".cases-panel button")].find((button) => button.textContent?.includes("Save current analysis")) as HTMLButtonElement;
+    await act(async () => save.click());
+    await waitFor("save dialog", () => document.querySelector("#case-name") !== null);
+    // The dialog offers a name derived from the target and the date.
+    const name = document.querySelector("#case-name") as HTMLInputElement;
+    expect(name.value).toMatch(/^case-\d{4}-\d{2}-\d{2}$/);
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(name, "ls-triage");
+      name.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await act(async () => (document.querySelector(".modal button[type=\"submit\"]") as HTMLButtonElement).click());
+    await waitFor("save toast", () => (document.querySelector(".toast")?.textContent ?? "").includes("Case saved"));
+    const request = calls.filter((call) => call.method === "case.save").at(-1);
+    expect(request?.params["name"]).toBe("ls-triage");
+    expect(request?.params["includeEvidence"]).toBe(true);
+    expect(document.querySelector("#case-name")).toBeNull();
+    expect(String(request?.params["report"])).toContain("# REA analysis report");
+    expect(JSON.parse(String(request?.params["reportJson"]))).toMatchObject({ schemaVersion: 1 });
+    expect(document.querySelector(".toast")?.textContent).toContain("canonical bundle included");
+
+    await waitFor("saved case row", () => document.querySelectorAll(".case-row").length === 1);
+    expect(document.querySelector(".case-row")?.textContent).toContain("ls-triage");
+    expect(document.querySelector(".case-row")?.textContent).toContain("cases/ls-triage");
+    expect(document.querySelector(".cases-panel .retained-heading p")?.textContent).toContain("1 case");
+  });
+
+  it("explains an unusable case name instead of sending it", async () => {
+    const { calls } = installFetch();
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("cases panel", () => document.querySelector(".cases-panel") !== null);
+    await act(async () => ([...document.querySelectorAll(".cases-panel button")].find((button) => button.textContent?.includes("Save current analysis")) as HTMLButtonElement | undefined)?.click());
+    await waitFor("save dialog", () => document.querySelector("#case-name") !== null);
+
+    const name = document.querySelector("#case-name") as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(name, "../escape");
+      name.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await act(async () => (document.querySelector(".modal button[type=\"submit\"]") as HTMLButtonElement).click());
+
+    await waitFor("name error", () => document.querySelector(".field-error") !== null);
+    expect(document.querySelector(".field-error")?.textContent).toContain("Start with a letter or digit");
+    expect(document.querySelector("#case-name")?.getAttribute("aria-invalid")).toBe("true");
+    expect(calls.some((call) => call.method === "case.save")).toBe(false);
+  });
+
+  it("offers to overwrite a case whose folder name is taken", async () => {
+    installFetch({
+      "case.save": ({ overwrite }) =>
+        overwrite === true
+          ? {
+            body: {
+              result: {
+                ok: true,
+                name: "ls-triage",
+                directory: "/tmp/workspace/cases/ls-triage",
+                files: [{ name: "analysis.md", bytes: 10 }, { name: "analysis.json", bytes: 12 }],
+                evidence: { ok: false, error: "REA is not connected" },
+              },
+            },
+          }
+          : {
+            body: {
+              result: {
+                ok: false,
+                name: "ls-triage",
+                directory: "/tmp/workspace/cases/ls-triage",
+                files: [],
+                error: 'A case named "ls-triage" already exists. Choose another name or allow overwrite.',
+              },
+            },
+          },
+    });
+    await render();
+    await waitFor("workspace", () => document.querySelector(".page-heading h1") !== null);
+    await act(async () => buttonWith("Evidence")?.click());
+    await waitFor("cases panel", () => document.querySelector(".cases-panel") !== null);
+
+    const save = [...document.querySelectorAll(".cases-panel button")].find((button) => button.textContent?.includes("Save current analysis")) as HTMLButtonElement;
+    await act(async () => save.click());
+    await waitFor("save dialog", () => document.querySelector("#case-name") !== null);
+    const name = document.querySelector("#case-name") as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(name, "ls-triage");
+      name.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await act(async () => (document.querySelector(".modal button[type=\"submit\"]") as HTMLButtonElement).click());
+    await waitFor("case conflict", () => buttonWith("Overwrite it") !== undefined);
+    expect(document.querySelector(".modal .error-notice")?.textContent ?? "").toContain("already exists");
+
+    await act(async () => buttonWith("Overwrite it")?.click());
+    await waitFor("overwrite toast", () => (document.querySelector(".toast")?.textContent ?? "").includes("Case saved"));
+    // A missing bundle is reported next to the saved report, not hidden.
+    expect(document.querySelector(".cases-panel .error-notice, .error-notice")?.textContent).toContain("could not write the evidence bundle");
   });
 
   it("filters retained records and offers an overwrite when the bundle exists", async () => {
