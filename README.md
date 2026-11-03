@@ -172,6 +172,7 @@ state changes pass an allowlisted, token-authenticated HTTP gateway.
 Start with [`docs/desktop.md`](docs/desktop.md) for the architecture, security
 boundaries, validation status, and the honest list of what is not verified
 (the native window has not been launched here, and no live model turn was run).
+Release history lives in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Library use
 
@@ -301,6 +302,12 @@ The four core behaviours that would otherwise fail silently are locked down by
 tests rather than convention: SSE frames split across TCP segments, multi-byte
 characters split across segments, tool-call arguments arriving in fragments, and
 failed tool calls being returned to the model instead of aborting the turn.
+
+## Releases
+
+Releases are annotated `v*` tags on `main` with a matching GitHub release; the
+notes are taken from [`CHANGELOG.md`](CHANGELOG.md). The current release is
+**v0.1.0**, the first tag of the engine, CLI, and desktop workspace.
 
 ## License
 
