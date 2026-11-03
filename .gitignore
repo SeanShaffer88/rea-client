@@ -3,6 +3,9 @@ dist/
 dist-desktop/
 dist-electron/
 coverage/
+
+# Installer output (npm run pack:win / pack:linux)
+release/
 *.tsbuildinfo
 
 # Runtime state, not source

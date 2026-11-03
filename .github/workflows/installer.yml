@@ -1,0 +1,96 @@
+name: Installer
+
+# Builds the Windows installer. Called by release.yml when a tag is pushed, and
+# runnable on its own: on demand, and on pull requests that touch packaging.
+#
+# Packaging is not part of ci.yml because it downloads an Electron runtime and
+# takes several minutes, and because a build that produces an installer is only
+# meaningful on the platform the installer targets.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'electron-builder.yml'
+      - 'build/**'
+      - 'desktop/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/installer.yml'
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      # The Electron runtime itself is not needed to build or typecheck; the
+      # packaging step below fetches exactly the copy it ships.
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      # Same order as ci.yml: the CLI the app spawns has to exist before the
+      # renderer and the Electron main process are built around it.
+      - name: Build engine, UI, and Electron shell
+        run: npm run build:desktop
+
+      # `--publish never` keeps this job from talking to GitHub releases; where
+      # the artifact goes is decided by the workflow that called it.
+      - name: Package the installer
+        run: npx electron-builder --win --publish never
+
+      # A silent success with no .exe is the failure mode this step exists to
+      # catch: electron-builder writes its output wherever `directories.output`
+      # says, and a config typo would otherwise look like a green build.
+      - name: Verify the installer exists
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path release -Filter '*-setup.exe' -Recurse
+          if (-not $installer) {
+            Get-ChildItem -Path release -Recurse | Out-String | Write-Host
+            throw 'electron-builder produced no setup executable.'
+          }
+          foreach ($file in $installer) {
+            '{0}  {1:N1} MB' -f $file.Name, ($file.Length / 1MB)
+            $file.Name | Out-File -FilePath installer-name.txt -Encoding utf8
+            (Get-FileHash -Algorithm SHA256 $file.FullName).Hash | Out-File -FilePath installer-sha256.txt -Encoding utf8
+          }
+          Get-Content installer-sha256.txt
+
+      # Unsigned builds are the default: there is no certificate in this
+      # repository. The log says so rather than letting a SmartScreen warning
+      # be discovered after the release is published.
+      - name: Report signing status
+        shell: pwsh
+        run: |
+          if ($env:CSC_LINK) { 'Build was signed with the configured certificate.' }
+          else { 'WARNING: no CSC_LINK secret is configured, so this installer is unsigned.' }
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: rea-workspace-windows-installer
+          path: |
+            release/*-setup.exe
+            installer-sha256.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -326,10 +326,11 @@ Automated coverage for the desktop tier:
 Not verified here, and not claimed:
 
 - **The native Electron window was never launched.** This sandbox has no GUI
-  display, no Electron binary (the postinstall download is blocked), and no
-  system GTK/NSS libraries. The main/preload code is typechecked and compiled to
-  ESM/CommonJS respectively, but native runtime behaviour needs a desktop
-  machine.
+  display, no Electron binary (GitHub release assets are not reachable from it),
+  and no system GTK/NSS libraries. The main/preload code is typechecked,
+  compiled, and packaged, but nothing here has seen the window draw. The
+  installer is likewise built on a GitHub Actions Windows runner rather than
+  installed and run on a real Windows desktop.
 - **Browser uploads were not exercised from a real browser engine.** The
   endpoint was validated with real HTTP requests, and the client explicitly
   turns an aborted/incompatible upload into "open it by path instead" rather
@@ -357,9 +358,43 @@ Not verified here, and not claimed:
 | "Desktop assets not found. Run npm run build:desktop." | The gateway started before the UI was built; rebuild and restart. |
 | Diagnostics says the local model is unavailable | Start a loopback OpenAI-compatible server (for example `llama-server`) matching `llm.baseUrl` in the config, then press *Run diagnostics*. |
 
-## Packaging notes (not implemented)
+## Packaging
 
-`npm run desktop` runs from a source checkout. A distributable build still
-needs: an Electron packager step, code signing, a Windows Job Object or POSIX
-process-group supervisor around the engine child, and bundled `rea-agents` /
-model assets. None of that is claimed by this repository yet.
+`npm run pack:win` builds an NSIS setup executable into `release/`; the same
+configuration produces an AppImage on Linux and a `.dmg` on macOS. The Windows
+build is the one CI produces and attaches to every release
+(`.github/workflows/installer.yml`, called by `release.yml` — and runnable on its
+own, or automatically on pull requests that touch packaging).
+
+What the installer contains:
+
+| Included | Why |
+| --- | --- |
+| Electron runtime 45 | the app shell |
+| `dist/` (engine + CLI), `dist-desktop/` (UI), `dist-electron/` (main + preload) | the product itself |
+| `node_modules/` production tree, including `rea-agents` 6.8.0 | the engine launches REA as a child process; nothing is fetched at install or run time |
+
+Three decisions in `electron-builder.yml` are load-bearing:
+
+1. **`asarUnpack: dist/**, node_modules/**`.** The engine bridge spawns
+   `dist/cli.js` with `ELECTRON_RUN_AS_NODE`, and that child spawns the REA
+   server. Both are plain Node, which cannot read inside `app.asar`, so anything
+   they execute has to be unpacked next to the archive. `src/config.ts` maps
+   archive paths to their unpacked copies (`unpackedPath`) for the same reason.
+2. **`npmRebuild: false`.** `rea-agents` pins `@lydell/node-pty`, which ships
+   N-API prebuilds per platform. A rebuild would require a C++ toolchain on the
+   packaging machine and change nothing at runtime.
+3. **Config and workspace live under the user's application data**, not the
+   install directory: an installed app may sit in a read-only location and is
+   launched from an arbitrary working directory. `appDataLayout()` in
+   `src/config.ts` defines `%APPDATA%\REA Workspace\config.json` and
+   `…\workspace`, and the main process seeds the config on first launch.
+
+The installer is unsigned — there is no code-signing certificate in this
+repository. If `CSC_LINK` / `CSC_KEY_PASSWORD` are configured as secrets,
+electron-builder signs the build automatically; otherwise the packaging job says
+in its log and in the release notes that the artifact is unsigned.
+
+Still not implemented, and not claimed: a Windows Job Object (or POSIX
+process-group) supervisor around the engine child, code signing, bundled
+Ghidra/JRE or model weights, and notarization for macOS.

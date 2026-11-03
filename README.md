@@ -53,7 +53,8 @@ Node 22 and Node 24:
 | `doctor` verdicts (Node semver range, policy, workspace, MCP, providers, authenticated `/models`) | **Tested** in-process and against the live server |
 | Vendor manifest + offline verification | **Verified** — installed tree matches the published tarball on Linux and Windows (2398 files) |
 | Windows path, UNC air-gap policy, and `file://` canonicalization | **Tested** on both Linux (`path.win32`) and Windows (`windows-latest`) |
-| Native installers, Job Object supervisor, bundled model/Ghidra | **Not built** — see [Scope](#scope) |
+| Windows installer (NSIS setup `.exe`, bundled REA + Electron + UI) | **Built in CI** on `windows-latest` for every release and on packaging PRs; the built `.exe` is attached to each release. Not launched from this sandbox — see [Validation status](docs/desktop.md#validation-status) |
+| Job Object supervisor, bundled model/Ghidra, macOS/Linux installers | **Not built** — see [Scope](#scope) |
 
 The model client is exercised against a real HTTP server speaking the OpenAI
 `/v1/chat/completions` protocol, though CI does not bundle a live `llama-server`
@@ -79,6 +80,34 @@ corrected mapping are in [`docs/rea-integration-notes.md`](docs/rea-integration-
 | 4 tools | **229 tools** |
 | `node.exe rea/dist/index.js --mcp` | `node rea/scripts/rea.mjs mcp` — `dist/index.js` is not in the package |
 | Node 20+ | `^22.23.4 \|\| ^24.22.1 \|\| >=26.12.1` |
+
+## Install on Windows
+
+Download **`rea-client-<version>-windows-x64-setup.exe`** from the
+[latest release](https://github.com/SeanShaffer88/rea-client/releases/latest) and
+run it. The installer is per-user (no administrator prompt, no service, no
+scheduled task), installs `REA Workspace` into a directory you choose, and adds
+desktop and Start menu shortcuts. It bundles the Electron runtime, the engine,
+the React workspace UI, and **REA itself** — `rea-agents` 6.8.0 from
+[morluto/rea](https://github.com/morluto/rea) — so the installed app needs no
+network, no Node.js, and no separate REA install.
+
+The first launch writes a configuration file and creates an empty workspace:
+
+| Path | Contents |
+| --- | --- |
+| `%APPDATA%\REA Workspace\config.json` | model endpoint, tool scope, air-gap policy, workspace location |
+| `%APPDATA%\REA Workspace\workspace\` | saved cases (`cases/<name>/`), evidence bundles |
+
+Both are reached from the app's **File** and **Help** menus. Uninstalling removes
+the program and leaves that directory alone, so saved cases survive.
+
+Two things the build is honest about: the installer is **not code-signed**, so
+Windows SmartScreen shows an "unknown publisher" warning (choose *More info* →
+*Run anyway*), and REA's optional external providers — Ghidra, IDA, Hopper — are
+not bundled, because they are separate tools you install yourself. What ships is
+REA's own analysis surface; the app reports a provider as unavailable rather than
+pretending otherwise.
 
 ## Quick start
 
@@ -107,6 +136,11 @@ npm run build:desktop
 npm run desktop           # native Electron window
 npm run desktop:web       # browser UI on 127.0.0.1:5173
 npm run desktop:preview   # browser UI on 0.0.0.0:5173 (explicit opt-in)
+
+# Installer (output in release/)
+npm run pack:win          # NSIS setup .exe, must run on Windows
+npm run pack:linux        # AppImage
+npm run pack:dir          # unpacked app directory, no installer
 ```
 
 `DEFAULT_CONFIG` automatically resolves `vendor/rea-agents/scripts/rea.mjs` (for
@@ -294,15 +328,22 @@ See [docs/supply-chain.md](docs/supply-chain.md).
 
 ## Scope
 
-Built here: the engine, its tests, the headless CLI, and an Electron/React
-desktop workspace (shared with a browser preview) that drives the real bridge.
+Built here: the engine, its tests, the headless CLI, an Electron/React desktop
+workspace (shared with a browser preview) that drives the real bridge, and the
+Windows installer that ships them together with REA.
 
-Not built here: native installers, Windows Job Object supervision, bundled
-Ghidra/JRE or model assets, and macOS/Linux packaging. The Electron main process
-is typechecked and compiled, but this build sandbox has no display, no Electron
-binary, and no GTK/NSS libraries, so the native window could not be launched
-here; that limitation is recorded in
+Not built here: Windows Job Object supervision, bundled Ghidra/JRE or model
+assets, code signing, and macOS/Linux installers. The packaging configuration
+covers those platforms — `npm run pack:linux` and the `mac` target both build —
+but only the Windows `.exe` is produced and verified by CI, because that is the
+one that has been asked for.
+
+The Electron main process is typechecked, compiled, and packaged, but this build
+sandbox has no display, no Electron binary, and no GTK/NSS libraries, so the
+native window has never been launched here; that limitation is recorded in
 [`docs/desktop.md`](docs/desktop.md#validation-status) rather than papered over.
+What CI does prove on every release: the installer is produced from the tagged
+tree, contains the app and a bundled REA, and its checksum is published with it.
 The engine's public surface (events, callbacks, config) remains the integration
 point for any other shell.
 
