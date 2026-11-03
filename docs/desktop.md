@@ -65,7 +65,7 @@ node dist/desktop/server.js --config config.example.json --port 5173
 For browser and CLI development, the default config path is `config.json`; `config.example.json` is a working
 starting point. The engine is only spawned on the first RPC, so opening the page
 does not touch a binary or a model. The packaged Windows application instead
-seeds its user configuration under `%APPDATA%\REA Workspace` and automatically
+seeds its user configuration under `%APPDATA%\rea-client` and automatically
 starts the bundled local model on a fresh installation. An explicitly supplied
 `--config <path>` preserves an external model setup; add `--bundled` to test or
 select the offline runtime with that configuration. A saved custom model endpoint
@@ -352,21 +352,24 @@ Windows native checks performed on November 3, 2026:
   all 535 tests across 42 files, vendored dependency verification, recorded
   advisory assessment, and coverage thresholds. V8 coverage measured 88.67%
   statements, 79.75% branches, 88.51% functions, and 91.68% lines.
+- The NSIS installer completed with exit code 0. All 5,794 installed offline
+  payload files passed integrity verification against the manifest hash anchored
+  in the installed application archive.
+- The native uninstaller completed with exit code 0, removed the installed
+  bundled model, and preserved the test AppData marker and workspace.
 
 Still not verified, and not claimed:
 
-- **The complete offline kit's installation and first launch remain under
-  validation.** Native rendering and packaged engine startup have been observed;
-  this does not establish every installer or bundled-provider path.
 - **Browser uploads were not exercised from a real browser engine.** The
   endpoint was validated with real HTTP requests, and the client explicitly
   turns an aborted/incompatible upload into "open it by path instead" rather
   than a raw stream error.
 - **No automated screenshot-based visual regression.** The native workspace has
   been viewed, but there is no automated image-comparison suite.
-- **No complete live model-driven UI investigation is claimed yet.** A real
-  bundled-model agent turn has run through the engine; native UI streaming,
-  cancellation, and in-page evidence population still require combined checks.
+- **The engine smoke checks do not establish a complete UI investigation.**
+  Real bundled-model agent turns have run through the engine. Native UI
+  streaming, cancellation, and in-page evidence population are separate from
+  those engine-level observations.
 - **A populated retained-evidence list was not produced live.** REA retains
   observations per MCP session, and the tools that create them only run during
   an agent turn. The live engine therefore reported an empty bundle; the
@@ -441,8 +444,10 @@ Three decisions in `electron-builder.yml` are load-bearing:
 3. **Config and workspace live under the user's application data**, not the
    install directory: an installed app may sit in a read-only location and is
    launched from an arbitrary working directory. `appDataLayout()` in
-   `src/config.ts` defines `%APPDATA%\REA Workspace\config.json` and
+   `src/config.ts` defines `%APPDATA%\rea-client\config.json` and
    `…\workspace`, and the main process seeds the config on first launch.
+   Electron resolves this directory before the display name changes to
+   `REA Workspace`, so the on-disk directory retains the package identifier.
 
 The installer is unsigned — there is no code-signing certificate in this
 repository. If `CSC_LINK` / `CSC_KEY_PASSWORD` are configured as secrets,

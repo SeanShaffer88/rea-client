@@ -54,7 +54,7 @@ Node 22 and Node 24:
 | Vendor manifest + offline verification | **Verified** — installed tree matches the published tarball on Linux and Windows (2398 files) |
 | Windows path, UNC air-gap policy, and `file://` canonicalization | **Tested** on both Linux (`path.win32`) and Windows (`windows-latest`) |
 | Windows installer | The previous app-only installer was **built in CI**. The expanded offline kit includes the model and analysis dependencies; its installation checks are recorded in [Validation status](docs/desktop.md#validation-status) |
-| Offline AI and decompilation dependencies | **Implemented, validation in progress** — portable llama.cpp, Qwen3-8B, Ghidra, JDK, and app-local Microsoft runtime; see [Packaging](docs/desktop.md#packaging) |
+| Offline AI and decompilation dependencies | **Built and smoke-tested** — portable llama.cpp, Qwen3-8B, Ghidra, JDK, and app-local Microsoft runtime; see [Validation status](docs/desktop.md#validation-status) |
 | Job Object supervisor, macOS/Linux installers | **Not built** — see [Scope](#scope) |
 
 The model client is exercised against a real HTTP server speaking the OpenAI
@@ -110,10 +110,11 @@ The first launch writes a configuration file and creates an empty workspace:
 
 | Path | Contents |
 | --- | --- |
-| `%APPDATA%\REA Workspace\config.json` | model endpoint, tool scope, air-gap policy, workspace location |
-| `%APPDATA%\REA Workspace\workspace\` | saved cases (`cases/<name>/`), evidence bundles |
+| `%APPDATA%\rea-client\config.json` | model endpoint, tool scope, air-gap policy, workspace location |
+| `%APPDATA%\rea-client\workspace\` | saved cases (`cases/<name>/`), evidence bundles |
 
-Both are reached from the app's **File** and **Help** menus. Uninstalling removes
+The directory uses the package identifier `rea-client`, even though the window
+is named `REA Workspace`. Both are reached from the app's **File** and **Help** menus. Uninstalling removes
 the program and leaves that directory alone, so saved cases survive.
 
 The installer is **not code-signed**, so Windows may report an unknown publisher.
@@ -358,7 +359,7 @@ recorded below.
 The native packaged Windows workspace has been launched, displayed the live
 229-tool catalog, opened its native file picker, and opened a real PE target
 through the packaged gateway. See
-[`docs/desktop.md`](docs/desktop.md#validation-status) for the remaining checks.
+[`docs/desktop.md`](docs/desktop.md#validation-status) for the scope of those checks.
 The expanded offline kit is an unreleased build; automatic publishing is
 blocked until the full payload can be distributed within GitHub's asset limits.
 The engine's public surface (events, callbacks, config) remains the integration

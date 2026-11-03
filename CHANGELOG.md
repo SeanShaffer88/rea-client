@@ -38,8 +38,10 @@ releases; see [Releasing](#releasing).
 - Publishing is explicitly gated until verified multipart delivery fits
   GitHub's 2 GiB per-asset limit. No new tag or release is published by this work.
 - Native Windows rendering, the file picker, and packaged REA target opening
-  have been exercised. Full offline installer and live agent validation remains
-  subject to the evidence in `docs/desktop.md`.
+  have been exercised. The offline installer and uninstaller both exited 0;
+  all 5,794 installed payload files passed integrity checks, and uninstall
+  preserved AppData and the workspace. Real model and Ghidra observations are
+  recorded separately in `docs/desktop.md`.
 
 ## [0.3.0] — 2026-11-03
 
@@ -53,7 +55,7 @@ The first release with a downloadable Windows installer.
   engine, the workspace UI, and REA itself (`rea-agents` 6.8.0 from
   [morluto/rea](https://github.com/morluto/rea)), so an installed copy needs no
   Node.js, no network, and no separate REA install. The app writes its config and
-  workspace to `%APPDATA%\REA Workspace`, and uninstalling leaves both behind.
+  workspace to `%APPDATA%\rea-client`, and uninstalling leaves both behind.
 - **`installer.yml`**, which builds that installer on `windows-latest` — called
   by the release workflow, runnable on demand, and run automatically on pull
   requests that touch packaging. `release.yml` now refuses to publish without
