@@ -142,7 +142,9 @@ export class OfflineRuntime {
     this.abort.signal.throwIfAborted();
     if (!this.temporaryDir) throw new Error("Offline runtime is not started.");
     const path = resolve(this.temporaryDir, "config.json");
-    await writeFile(path, JSON.stringify(config), { mode: 0o600 });
+    // This flag is derived from policy at parse time, not a file-schema key.
+    const { allowNonLoopback: _derivedPolicy, ...rea } = config.rea;
+    await writeFile(path, JSON.stringify({ ...config, rea }), { mode: 0o600 });
     return path;
   }
   public close(): Promise<void> {
